@@ -30,15 +30,24 @@ async def main():
     intermediary = Intermediary(host=HOST.get("intermediary"), port=PORT.get("intermediary"))
     nakurity_backend = NakurityBackend(intermediary)
 
-    # start intermediary and neuro server concurrently
-    tasks = [
-        asyncio.create_task(intermediary.start()),
-        asyncio.create_task(nakurity_backend.run_server(
-            host=HOST.get("nakurity-backend"),
-            port=PORT.get("nakurity-backend")
-            )
-        )
-    ]
+    # start intermediary first and wait for it to be listening
+    intermediary_task = await asyncio.create_task(intermediary.start())
+
+    # Set timeout for intermediary, incase it takes too long to start.
+    # if that happens, something is wrong
+    try:
+        await intermediary.wait_until_ready(timeout=5.0)
+    except asyncio.TimeoutError:
+        print("[Error] intermediary failed to start within timeout")
+        return
+    
+    # now start the backend (it will be able to connect to the intermediary or be discoverable)
+    nakurity_task = asyncio.create_task(nakurity_backend.run_server(
+        host=HOST.get("nakurity-backend"),
+        port=PORT.get("nakurity-backend")
+    ))
+
+    tasks = [intermediary_task, nakurity_task]
 
     # graceful shutdown on SIGINT
     loop = asyncio.get_event_loop()

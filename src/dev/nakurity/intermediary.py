@@ -40,8 +40,13 @@ class Intermediary:
         # `on_forward_to_neuro` should be an async callable taking (payload: dict) -> optional response
         self.on_forward_to_neuro = None  # set by server layer
 
+        # persistent queues, help manage the chokepoint where all integration messages
+        # goes pass neuro-relay. It is a relay integration after all.
         self.queue = asyncio.Queue()
         self._load_persisted_queue()
+
+        # waits until other asyncio tasks are ready
+        self._ready_event: Optional[asyncio.Event] = None
 
     def _load_persisted_queue(self):
         if QUEUE_FILE.exists():
@@ -182,7 +187,7 @@ class Intermediary:
             else:
                 await ws.send(json.dumps({"error": "invalid target/cmd"}))
 
-    async def _handler(self, ws: WebSocketServerProtocol, path):
+    async def _handler(self, ws: WebSocketServerProtocol):
         reg = await self._register(ws)
         if not reg:
             # registration failed; close
@@ -209,10 +214,38 @@ class Intermediary:
                 await self._notify_watchers({"event": "neuroos_disconnected", "name": name})
 
     async def start(self):
-        print(f"[Intermediary] starting on ws://{self.host}:{self.port}")
+        """
+        Start the intermediary WebSocket server and set an internal 'ready' event when bound.
+        """
         asyncio.create_task(self.retry_queue())
-        async with websockets.serve(self._handler, self.host, self.port):
-            await asyncio.Future()  # run forever
+
+        # ensure we have an event users can await to know when server is ready
+        self._ready_event = asyncio.Event()
+        print('a')
+
+        try:
+            # start the server explicitly (not using `async with` so we can set ready event immediately)
+            server = await websockets.serve(self._handler, self.host, self.port)
+            print('b')
+            # websockets.serve returns a Serve object and it has .wait_closed(); the server is now bound
+            print(f"[Intermediary] listening on ws://{self.host}:{self.port}")
+            self._ready_event.set()
+            print(f'c: {self._ready_event.is_set()}')
+
+            # keep serving until server is closed
+            asyncio.create_task(server.wait_closed())
+            print('d')
+        except OSError as e:
+            print(f"[Intermediary] Failed to start on ws://{self.host}:{self.port} -> {e}")
+            self._ready_event.set()  # unblock waiters even if failed
+            raise
+        except Exception as e:
+            print(f"[Intermediary] Unexpected error: {e}")
+            traceback.print_exc()
+            self._ready_event.set()
+            raise
+
+        
 
     # Helpers to send messages to integrations from the server layer
     async def send_to_integration(self, name: str, payload: dict):
@@ -247,3 +280,13 @@ class Intermediary:
                 await ws.send(json.dumps(payload))
             except Exception:
                 self.integrations.pop(name, None)
+
+    async def wait_until_ready(self, timeout: float = 5.0):
+        """Await until the server is ready (bounded) or raise on timeout."""
+        if self._ready_event is None:
+            print('e1')
+            # start() hasn't been called yet; immediate return or create+wait might be used
+            self._ready_event = asyncio.Event()
+        print('e2')
+        await asyncio.wait_for(self._ready_event.wait(), timeout=timeout)
+        print('e3')

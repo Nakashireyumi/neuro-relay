@@ -3,6 +3,7 @@ import asyncio
 import json
 import traceback
 from typing import Optional, Tuple
+import websockets
 
 # these imports come from the neuro-api package
 from neuro_api.server import (
@@ -22,14 +23,51 @@ connects and asks the server to choose an action, this server asks the intermedi
 You must adapt method names to the exact neuro-api version; this matches the docs you shared.
 """
 
-class NakurityBackend(AbstractRecordingNeuroServerClient,
-                    AbstractHandlerNeuroServerClient,
-                    AbstractNeuroServerClient):
+class NakurityBackend(
+        AbstractRecordingNeuroServerClient,
+        AbstractHandlerNeuroServerClient,
+        AbstractNeuroServerClient,
+    ):
     def __init__(self, intermediary: Intermediary):
         super().__init__()
         self.intermediary = intermediary
         # attach a callback so intermediary can call into this server
         self.intermediary.on_forward_to_neuro = self._handle_intermediary_forward
+        print("[Nakurity Backend] has initialized.")
+
+    # -- implement abstract methods required by neuro_api.base classes --
+    # These are minimal implementations to satisfy the abstract base classes.
+    # Adapt/refine later if neuro_api expects different semantics.
+
+    async def read_from_websocket(self) -> str:
+        """
+        Minimal stub: server-side code typically doesn't "read from websocket" via this method.
+        Provide a harmless default return; override with real behavior if needed.
+        """
+        # Not used in this server-oriented backend; return an empty string
+        await asyncio.sleep(0)  # ensure this is an async function
+        return ""
+
+    async def write_to_websocket(self, data: str):
+        """
+        Minimal stub to satisfy ABC. If the neuro_api expects writes to reach some client,
+        you should route them via the intermediary (self.intermediary.send_to_integration or .broadcast).
+        """
+        # For now, log and return. Replace this to forward to appropriate websocket if needed.
+        print("[NakurityBackend] write_to_websocket called (ignored in stub):", data)
+        await asyncio.sleep(0)
+
+    def submit_call_async_soon(self, cb, *args):
+        """
+        neuro_api may call this to schedule a callback on the event loop.
+        Implement using loop.call_soon to satisfy expectations.
+        """
+        loop = asyncio.get_event_loop()
+        try:
+            loop.call_soon(cb, *args)
+        except Exception:
+            # fallback: call safely inside loop
+            loop.call_soon_threadsafe(cb, *args)
 
     # Called by the neuro-api when it wants to add ephemeral context
     def add_context(self, game_title: str, message: str, reply_if_not_busy: bool):
@@ -131,4 +169,14 @@ class NakurityBackend(AbstractRecordingNeuroServerClient,
     async def run_server(self, host="127.0.0.1", port=8000):
         # neuro-api's AbstractNeuroServerClient subclass exposes .run(host,port) per docs
         print("[Nakurity Backend] starting relay backend...")
-        await self.run(host, port)  # provided by neuro_api.server
+        
+        async def main():
+            async with websockets.serve(self.intermediary, host, port) as ws:
+                # Read messages in a loop
+                while True:
+                    try:
+                        await self.read_message(ws)
+                    except websockets.exceptions.ConnectionClosed:
+                        break
+        
+        asyncio.run(await main())
