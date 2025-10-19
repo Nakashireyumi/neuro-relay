@@ -221,20 +221,16 @@ class Intermediary:
 
         # ensure we have an event users can await to know when server is ready
         self._ready_event = asyncio.Event()
-        print('a')
 
         try:
             # start the server explicitly (not using `async with` so we can set ready event immediately)
             server = await websockets.serve(self._handler, self.host, self.port)
-            print('b')
             # websockets.serve returns a Serve object and it has .wait_closed(); the server is now bound
             print(f"[Intermediary] listening on ws://{self.host}:{self.port}")
             self._ready_event.set()
-            print(f'c: {self._ready_event.is_set()}')
 
             # keep serving until server is closed
             asyncio.create_task(server.wait_closed())
-            print('d')
         except OSError as e:
             print(f"[Intermediary] Failed to start on ws://{self.host}:{self.port} -> {e}")
             self._ready_event.set()  # unblock waiters even if failed
@@ -284,9 +280,6 @@ class Intermediary:
     async def wait_until_ready(self, timeout: float = 5.0):
         """Await until the server is ready (bounded) or raise on timeout."""
         if self._ready_event is None:
-            print('e1')
             # start() hasn't been called yet; immediate return or create+wait might be used
             self._ready_event = asyncio.Event()
-        print('e2')
         await asyncio.wait_for(self._ready_event.wait(), timeout=timeout)
-        print('e3')

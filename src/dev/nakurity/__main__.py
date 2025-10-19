@@ -31,7 +31,7 @@ async def main():
     nakurity_backend = NakurityBackend(intermediary)
 
     # start intermediary first and wait for it to be listening
-    intermediary_task = await asyncio.create_task(intermediary.start())
+    intermediary_task = await intermediary.start()
 
     # Set timeout for intermediary, incase it takes too long to start.
     # if that happens, something is wrong
@@ -49,10 +49,28 @@ async def main():
 
     tasks = [intermediary_task, nakurity_task]
 
-    # graceful shutdown on SIGINT
+    # graceful shutdown (cross-platform)
     loop = asyncio.get_event_loop()
     stop = loop.create_future()
-    loop.add_signal_handler(signal.SIGINT, lambda: stop.set_result(True))
+
+    def _stop(*_):
+        if not stop.done():
+            stop.set_result(True)
+
+    try:
+        loop.add_signal_handler(signal.SIGINT, _stop)
+    except NotImplementedError:
+        # Windows fallback: use add_reader on stdin
+        import threading
+        def wait_for_ctrl_c():
+            import time
+            try:
+                while True:
+                    time.sleep(0.2)
+            except KeyboardInterrupt:
+                _stop()
+        threading.Thread(target=wait_for_ctrl_c, daemon=True).start()
+
     await stop
 
     for t in tasks:

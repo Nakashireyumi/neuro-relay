@@ -3,6 +3,7 @@ import asyncio
 import json
 import traceback
 from typing import Optional, Tuple
+from ssl import SSLContext
 import websockets
 
 # these imports come from the neuro-api package
@@ -33,6 +34,8 @@ class NakurityBackend(
         self.intermediary = intermediary
         # attach a callback so intermediary can call into this server
         self.intermediary.on_forward_to_neuro = self._handle_intermediary_forward
+        # Inbound queue
+        self._recv_q = asyncio.Queue()        
         print("[Nakurity Backend] has initialized.")
 
     # -- implement abstract methods required by neuro_api.base classes --
@@ -41,21 +44,20 @@ class NakurityBackend(
 
     async def read_from_websocket(self) -> str:
         """
-        Minimal stub: server-side code typically doesn't "read from websocket" via this method.
-        Provide a harmless default return; override with real behavior if needed.
+        This fulfills neuro_api's requirement.
+        Waits until some data is pushed into _recv_q by intermediary forward events.
         """
-        # Not used in this server-oriented backend; return an empty string
-        await asyncio.sleep(0)  # ensure this is an async function
-        return ""
+        data = await self._recv_q.get()
+        return data
 
     async def write_to_websocket(self, data: str):
         """
-        Minimal stub to satisfy ABC. If the neuro_api expects writes to reach some client,
-        you should route them via the intermediary (self.intermediary.send_to_integration or .broadcast).
+        Instead of writing to a single client websocket, we broadcast to all integrations/watchers.
         """
-        # For now, log and return. Replace this to forward to appropriate websocket if needed.
-        print("[NakurityBackend] write_to_websocket called (ignored in stub):", data)
-        await asyncio.sleep(0)
+        await self.intermediary.broadcast({
+            "event": "backend_message",
+            "payload": data
+        })
 
     def submit_call_async_soon(self, cb, *args):
         """
@@ -109,10 +111,11 @@ class NakurityBackend(
         fut = asyncio.get_event_loop().create_future()
 
         async def waiter():
-            # send the choice request to all integrations
-            await self.intermediary.broadcast({"event": "choose_action_request", "payload": ask})
-            # we then wait for any integration to send back a response via the intermediary.on_forward_to_neuro pathway
             try:
+                # send the choice request to all integrations
+                await self.intermediary.broadcast({"event": "choose_action_request", "payload": ask})
+                # we then wait for any integration to send back a response via the intermediary.on_forward_to_neuro pathway
+                
                 # wait for up to 8 seconds for a response
                 resp = await asyncio.wait_for(self._wait_for_integration_choice(), timeout=8.0)
                 fut.set_result(resp)
@@ -159,24 +162,30 @@ class NakurityBackend(
                 await self._choice_q.put(choice)
                 return {"accepted": True}
 
-            # generic ack for other messages
+            # push message into read queue
+            await self._recv_q.put(json.dumps(payload))
             return {"accepted": True, "echo": payload}
         except Exception:
             traceback.print_exc()
             return {"error": "forward handling failed"}
 
     # run the neuro-api server
-    async def run_server(self, host="127.0.0.1", port=8000):
-        # neuro-api's AbstractNeuroServerClient subclass exposes .run(host,port) per docs
-        print("[Nakurity Backend] starting relay backend...")
-        
-        async def main():
-            async with websockets.serve(self.intermediary, host, port) as ws:
-                # Read messages in a loop
-                while True:
-                    try:
-                        await self.read_message(ws)
-                    except websockets.exceptions.ConnectionClosed:
-                        break
-        
-        asyncio.run(await main())
+    async def run_server(self, host="127.0.0.1", port=8000, ssl_context: Optional[SSLContext] = None):
+        print(f"[Nakurity Backend] Starting websocket server on ws://{host}:{port}")
+
+        async def handler(websocket):
+            try:
+                async for message in websocket:
+                    data = json.loads(message)
+                    response = await self._handle_intermediary_forward(data)
+                    await websocket.send(json.dumps(response))
+            except Exception:
+                traceback.print_exc()
+
+        try:
+            async with websockets.serve(handler, host, port, ssl=ssl_context):
+                print("[Nakurity Backend] WebSocket server started.")
+                await asyncio.Future()  # run forever
+        except Exception as exc:
+            print(f"[Nakurity Backend] Failed to start websocket server:\n{exc}")
+            raise
