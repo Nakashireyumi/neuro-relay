@@ -37,8 +37,8 @@ class Intermediary:
         self.watchers: Dict[str, WebSocketServerProtocol] = {}
 
         # internal routing hooks (can be replaced by Neuro-OS)
-        # `on_forward_to_neuro` should be an async callable taking (payload: dict) -> optional response
-        self.on_forward_to_neuro = None  # set by server layer
+        # `forward_to_neuro` should be an async callable taking (payload: dict) -> optional response
+        self.forward_to_neuro = None  # set by server layer
 
         # persistent queues, help manage the chokepoint where all integration messages
         # goes pass neuro-relay. It is a relay integration after all.
@@ -47,6 +47,13 @@ class Intermediary:
 
         # waits until other asyncio tasks are ready
         self._ready_event: Optional[asyncio.Event] = None
+        
+        # Intermediary saves an action registry and converts them into a unified action context
+        # for neuro to use, that context will contain all actions from all connected integrations
+        # from the Nakurity Backend.
+        self.action_registry: Dict[str, Dict[str, Any]] = {}
+
+        self.nakurity_outbound_client = None
 
     def _load_persisted_queue(self):
         if QUEUE_FILE.exists():
@@ -67,6 +74,15 @@ class Intermediary:
             qcopy.put_nowait(item)
         self.queue = qcopy
         QUEUE_FILE.write_bytes(pickle.dumps(items))
+
+    async def collect_registered_actions(self) -> dict:
+        """Return a unified action schema for all integrations."""
+        unified = {}
+        for integration, actions in self.action_registry.items():
+            for act_name, schema in actions.items():
+                # Prefix action name with integration namespace
+                unified[f"{integration}.{act_name}"] = schema
+        return unified
 
     async def _register(self, ws: WebSocketServerProtocol) -> Optional[Dict[str, Any]]:
         raw = await ws.recv()
@@ -146,10 +162,23 @@ class Intermediary:
                 "payload": payload
             })
 
+            # Check for action registration
+            if payload.get("event") == "register_actions":
+                schema = payload.get("actions", {})
+                self.action_registry[origin_name] = schema
+                print(f"[Intermediary] Registered actions from {origin_name}: {list(schema.keys())}")
+                await self._notify_watchers({
+                    "event": "integration_registered_actions",
+                    "from": origin_name,
+                    "actions": list(schema.keys())
+                })
+                continue
+            
+            print(f"[Intermediary] forwarding payload from {origin_name} to nakurity_outbound_client: {payload!r}")
             # If the relay layer has a callback to forward to Neuro, call it and send back result
-            if callable(self.on_forward_to_neuro):
+            if callable(self.forward_to_neuro):
                 try:
-                    resp = await self.on_forward_to_neuro({
+                    resp = await self.forward_to_neuro({
                         "from_integration": origin_name,
                         "payload": payload
                     })
@@ -241,7 +270,8 @@ class Intermediary:
             self._ready_event.set()
             raise
 
-        
+    async def send_outbound(self, payload: dict):
+        self.nakurity_outbound_client
 
     # Helpers to send messages to integrations from the server layer
     async def send_to_integration(self, name: str, payload: dict):

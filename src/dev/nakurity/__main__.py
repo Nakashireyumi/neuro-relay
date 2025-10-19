@@ -52,8 +52,27 @@ async def main():
 
     tasks = [intermediary_task, nakurity_task]
 
-    # start nakurity client once all backends have started
-    await connect_outbound(f"ws://{HOST.get('nakurity-client')}:{PORT.get('nakurity-client')}", intermediary)
+    # start nakurity client (outbound) as a background task, give it a forwarding callback
+    # We pass the backend's intermediary forwarder so inbound messages from the real Neuro
+    # are forwarded into the relay pipeline.
+    outbound_uri = f"ws://{HOST.get('nakurity-client')}:{PORT.get('nakurity-client')}"
+    # create a background task which will attach a NakurityClient to the loop
+    async def start_outbound():
+        # pass intermediary._handle_intermediary_forward as the router callback
+        # so remote Neuro actions are fed into our backend pipeline
+        client = await connect_outbound(outbound_uri, nakurity_backend._handle_intermediary_forward)
+        if client is None:
+            print("[Main] outbound client failed to connect")
+        else:
+            # store client instance for later use, but do NOT overwrite intermediary.nakurity_outbound_client
+            intermediary.nakurity_outbound_client = client
+            nakurity_backend.outbound_client = client  # optionally
+            print("[Main] outbound client connected and stored")
+            print("[Main] intermediary.nakurity_outbound_client is", intermediary.nakurity_outbound_client)
+            print("[Main] nakurity_backend._handle_intermediary_forward is", nakurity_backend._handle_intermediary_forward)
+
+    outbound_task = asyncio.create_task(start_outbound())
+    tasks.append(outbound_task)
 
     # graceful shutdown (cross-platform)
     loop = asyncio.get_event_loop()

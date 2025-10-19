@@ -33,42 +33,39 @@ class NakurityBackend(
         super().__init__()
         self.intermediary = intermediary
         # attach a callback so intermediary can call into this server
-        self.intermediary.on_forward_to_neuro = self._handle_intermediary_forward
+        self.intermediary.nakurity_outbound_client = self._handle_intermediary_forward
         # Inbound queue
-        self._recv_q = asyncio.Queue()        
+        self._recv_q = asyncio.Queue()
+        # Neuro Integration Clients list
+        self.clients: dict[str, websockets.WebSocketServerProtocol] = {} 
         print("[Nakurity Backend] has initialized.")
 
-    # -- implement abstract methods required by neuro_api.base classes --
-    # These are minimal implementations to satisfy the abstract base classes.
-    # Adapt/refine later if neuro_api expects different semantics.
-
     async def read_from_websocket(self) -> str:
-        """
-        This fulfills neuro_api's requirement.
-        Waits until some data is pushed into _recv_q by intermediary forward events.
-        """
+        # Block until someone pushes data into _recv_q (eg: integration forwarded a payload)
         data = await self._recv_q.get()
         return data
 
     async def write_to_websocket(self, data: str):
-        """
-        Instead of writing to a single client websocket, we broadcast to all integrations/watchers.
-        """
-        await self.intermediary.broadcast({
+        # data is raw string JSON. Broadcast to all connected integrations and to intermediary watchers.
+        # Also allow NakurityClient (outbound) to send to real Neuro if configured (handled elsewhere).
+        # Send to intermediary watchers for visibility:
+        await self.intermediary._notify_watchers({
             "event": "backend_message",
             "payload": data
         })
+        # attempt to send to all connected clients (they may be local neuro SDK integrations)
+        for name, ws in list(self.clients.items()):
+            try:
+                await ws.send(data)
+            except Exception:
+                print(f"[Nakurity Backend] failed to send to {name}, removing.")
+                self.clients.pop(name, None)
 
     def submit_call_async_soon(self, cb, *args):
-        """
-        neuro_api may call this to schedule a callback on the event loop.
-        Implement using loop.call_soon to satisfy expectations.
-        """
         loop = asyncio.get_event_loop()
         try:
             loop.call_soon(cb, *args)
         except Exception:
-            # fallback: call safely inside loop
             loop.call_soon_threadsafe(cb, *args)
 
     # Called by the neuro-api when it wants to add ephemeral context
@@ -147,7 +144,19 @@ class NakurityBackend(
         return await self._choice_q.get()
     
     def handle_startup(self, game_title, integration_name = "Undefined Integration"):
-        return self._handle_intermediary_forward({ "from_integration": integration_name, "payload": {  } })
+        return self._handle_intermediary_forward(
+            {
+                "from_integration": integration_name,
+                "payload": {
+                    "game_title": game_title,
+                    "metadata": {
+                        "notes":
+                            """This is for montioring by Neuro-OS and is not called anywhere else.
+                            (The Neuro Backend gets the relay client's name)"""
+                    }
+                }
+            }
+        )
 
     # this method will be called by intermediary when integration messages arrive
     async def _handle_intermediary_forward(self, msg: dict):
@@ -155,6 +164,7 @@ class NakurityBackend(
         msg: {"from_integration": "<name>", "payload": {...}}
         If payload contains a 'choice' event, put it on the queue; otherwise, return None or an ack.
         """
+        print(f"[Nakurity Backend] received forwarded msg from intermediary: {msg!r}")
         try:
             payload = msg.get("payload", {})
             # if integration replies with { "choice": {...} } we'll route it to the waiting chooser
@@ -164,6 +174,27 @@ class NakurityBackend(
                     self._choice_q = asyncio.Queue()
                 await self._choice_q.put(choice)
                 return {"accepted": True}
+            elif msg.get("query") == "get_registered_actions":
+                return {"actions": await self.intermediary.collect_registered_actions()}
+            
+            # Neuro chose an action — find correct integration
+            if "action" in payload:
+                action_name = payload["action"]
+                data = payload.get("data", {})
+                integration_name = self._resolve_integration_for_action(action_name)
+                if integration_name:
+                    await self.intermediary.send_to_integration(integration_name, {
+                        "event": "execute_action",
+                        "action": action_name,
+                        "params": data
+                    })
+                    return {"forwarded_to": integration_name}
+                
+            if "from_integration" in msg:
+                origin = msg["from_integration"]
+
+                if origin in self.clients:
+                    await self.send_to_neuro_client(origin, payload)
 
             # push message into read queue
             await self._recv_q.put(json.dumps(payload))
@@ -171,19 +202,86 @@ class NakurityBackend(
         except Exception:
             traceback.print_exc()
             return {"error": "forward handling failed"}
+        
+    async def send_to_neuro_client(self, client_name: str, message: dict):
+        self.intermediary.nakurity_outbound_client()
+        
+    def _resolve_integration_for_action(self, action_name: str) -> Optional[str]:
+        """Determine which integration owns the given action name."""
+        if "." in action_name:
+            return action_name.split(".")[0]
+        for integration, actions in self.intermediary.action_registry.items():
+            if action_name in actions:
+                return integration
+        return None
+        
+    async def send_to_connected_client(self, game_title: str, command_bytes: bytes):
+        """Optional helper to send server->client command to a specific local client."""
+        ws = self.clients.get(game_title)
+        if not ws:
+            print(f"[Nakurity Backend] no client {game_title} connected")
+            return False
+        try:
+            await ws.send(command_bytes.decode("utf-8"))
+            return True
+        except Exception:
+            print(f"[Nakurity Backend] failed to send to {game_title}")
+            self.clients.pop(game_title, None)
+            return False
 
     # run the neuro-api server
     async def run_server(self, host="127.0.0.1", port=8000, ssl_context: Optional[SSLContext] = None):
+        """
+        Run a websocket server that accepts Neuro SDK client integrations.
+        Each client is expected to follow the Neuro SDK spec (send JSON commands).
+        Messages from connected clients are forwarded into the Intermediary via on_forward_to_neuro.
+        """
+
         print(f"[Nakurity Backend] Starting websocket server on ws://{host}:{port}")
 
         async def handler(websocket):
+            # for the Neuro SDK client, we expect the client to send startup with "game" name,
+            # but since protocols vary, we peek at the first message to get the game/title.
+            client_name = None
             try:
-                async for message in websocket:
-                    data = json.loads(message)
-                    response = await self._handle_intermediary_forward(data)
-                    await websocket.send(json.dumps(response))
+                async for raw in websocket:
+                    try:
+                        data = json.loads(raw)
+                    except Exception:
+                        # non-json, make a wrapper
+                        data = {"raw": raw}
+
+                    # If message contains 'game' field (client messages), capture name
+                    client_name = data.get("game") or client_name or "unknown-client"
+                    # store mapping for later sends
+                    if client_name not in self.clients:
+                        self.clients[client_name] = websocket
+                        await self.intermediary._notify_watchers({
+                            "event": "integration_connected_via_backend",
+                            "name": client_name
+                        })
+
+                    # forward to intermediary using the same shape used in other paths:
+                    fwd = {"from_integration": client_name, "payload": data}
+                    try:
+                        resp = await self.intermediary.nakurity_outbound_client(fwd) if callable(self.intermediary.nakurity_outbound_client) else None
+                        # send ack back to client if intermediary returned something
+                        if resp is not None:
+                            await websocket.send(json.dumps({"result": resp}))
+                    except Exception:
+                        traceback.print_exc()
+                        await websocket.send(json.dumps({"error": "failed to forward to relay"}))
+            except websockets.ConnectionClosed:
+                pass
             except Exception:
                 traceback.print_exc()
+            finally:
+                if client_name:
+                    self.clients.pop(client_name, None)
+                    await self.intermediary._notify_watchers({
+                        "event": "integration_disconnected_via_backend",
+                        "name": client_name
+                    })
 
         try:
             async with websockets.serve(handler, host, port, ssl=ssl_context):
