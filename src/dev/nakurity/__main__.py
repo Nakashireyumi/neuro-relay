@@ -4,6 +4,7 @@ import signal
 
 from .intermediary import Intermediary
 from .server import NakurityBackend
+from .client import connect_outbound
 from ..utils.loadconfig import load_config
 
 """
@@ -19,11 +20,13 @@ cfg = load_config()
 
 HOST = {
     "intermediary": cfg.get("intermediary", {}).get("host", "127.0.0.1"),
-    "nakurity-backend": cfg.get("backend", {}).get("host", "127.0.0.1")
+    "nakurity-backend": cfg.get("nakurity-backend", {}).get("host", "127.0.0.1"),
+    "nakurity-client": cfg.get("nakurity-client", {}).get("host", "127.0.0.1"),
 }
 PORT = {
     "intermediary": int(cfg.get("intermediary", {}).get("port", 8765)),
-    "nakurity-backend": int(cfg.get("nakurity-backend", {}).get("port", 8000))
+    "nakurity-backend": int(cfg.get("nakurity-backend", {}).get("port", 8001)),
+    "nakurity-client": int(cfg.get("nakurity-client", {}).get("port", 8000)),
 }
 
 async def main():
@@ -48,6 +51,9 @@ async def main():
     ))
 
     tasks = [intermediary_task, nakurity_task]
+
+    # start nakurity client once all backends have started
+    await connect_outbound(f"ws://{HOST.get('nakurity-client')}:{PORT.get('nakurity-client')}", intermediary)
 
     # graceful shutdown (cross-platform)
     loop = asyncio.get_event_loop()

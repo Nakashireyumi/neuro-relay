@@ -47,7 +47,7 @@ async def fake_watcher():
 
 async def fake_neuro_request():
     # Connect directly to the fake Neuro backend
-    uri = "ws://127.0.0.1:8000"
+    uri = "ws://127.0.0.1:8001"
     async with websockets.connect(uri) as ws:
         # simulate Neuro asking for an action
         request = {

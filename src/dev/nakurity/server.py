@@ -145,6 +145,9 @@ class NakurityBackend(
         if not hasattr(self, "_choice_q"):
             self._choice_q = asyncio.Queue()
         return await self._choice_q.get()
+    
+    def handle_startup(self, game_title, integration_name = "Undefined Integration"):
+        return self._handle_intermediary_forward({ "from_integration": integration_name, "payload": {  } })
 
     # this method will be called by intermediary when integration messages arrive
     async def _handle_intermediary_forward(self, msg: dict):

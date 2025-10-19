@@ -19,4 +19,10 @@ nakurity-backend:
   # Neuro OS is meant to use Neuro Relay to help manage multiple neuro integrations being
   #   to the neuro backend
   host: "127.0.0.1"
+  port: 8001
+
+nakurity-client:
+  # The Nakurity Client is the single integration that should be connected to neuro at a time
+  # To allow relay messages back and forth
+  host: "127.0.0.1"
   port: 8000

@@ -4,8 +4,7 @@ import websockets
 from neuro_api.api import AbstractNeuroAPI, NeuroAction
 
 """
-Optional: a Neuro client that connects out to a real Neuro backend.
-If you don't need the relay to connect outward, you can ignore this file.
+A Neuro client that connects out to a real Neuro backend.
 """
 
 class NakurityClient(AbstractNeuroAPI):
@@ -15,6 +14,7 @@ class NakurityClient(AbstractNeuroAPI):
         super().__init__(self.name)
         # callback to forward action into local intermediary
         self.router_forward_cb = router_forward_cb
+        print("[Nakurity Client] has initialized.")
 
     async def write_to_websocket(self, data: str):
         await self.websocket.send(data)
@@ -42,11 +42,16 @@ class NakurityClient(AbstractNeuroAPI):
         print("[Nakurity Client] disconnected")
 
 async def connect_outbound(uri: str, router_forward_cb):
-    async with websockets.connect(uri) as ws:
-        c = NakurityClient(ws, router_forward_cb)
-        await c.initialize()
-        while True:
-            try:
-                await c.read_message()
-            except websockets.exceptions.ConnectionClosed:
-                break
+    try: 
+        async with websockets.connect(uri) as ws:
+            print("[Nakurity Client] starting connection to neuro backend")
+            c = NakurityClient(ws, router_forward_cb)
+            await c.initialize()
+            while True:
+                try:
+                    await c.read_message()
+                except websockets.exceptions.ConnectionClosed:
+                    break
+    except Exception as e:
+        print("[Nakurity Client] has failed to start!")
+        print(e)
