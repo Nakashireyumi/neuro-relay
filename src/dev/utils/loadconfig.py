@@ -8,9 +8,9 @@ def load_config():
     # Get the directory of this script
     current_dir = Path(__file__).resolve().parent
 
-    # Walk upward until we find "windows-api" folder (the project root)
+    # Walk upward until we find "neuro-relay" folder (the project root)
     for parent in current_dir.parents:
-        if parent.name == "windows-api":
+        if parent.name == "neuro-relay":
             project_root = parent
             break
     else:
