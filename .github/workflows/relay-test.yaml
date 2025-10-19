@@ -42,7 +42,7 @@ jobs:
 
       - name: 🧪 Run Test Harness
         run: |
-          python -m src.dev.nakurity.test_harness || (cat relay.log && exit 1)
+          python -m src.dev.tests.test_harness || (cat relay.log && exit 1)
 
       - name: 📜 Show Relay Logs
         if: always()
