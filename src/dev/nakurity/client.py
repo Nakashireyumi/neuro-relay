@@ -101,7 +101,9 @@ async def connect_outbound(uri: str, router_forward_cb):
     try:
         ws = await websockets.connect(uri)
     except Exception as e:
-        print("[Nakurity Client] failed to connect to:", uri, e)
+        print("[Nakurity Client] failed to connect to:", uri)
+        print(e)
+        # TODO: implement retry attempts
         return None
 
     try:
