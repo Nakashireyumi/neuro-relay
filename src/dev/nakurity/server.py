@@ -41,11 +41,13 @@ class NakurityBackend(
         print("[Nakurity Backend] has initialized.")
 
     async def read_from_websocket(self) -> str:
+        print("[Nakurity Backend (Websocket)] reading from websocket")
         # Block until someone pushes data into _recv_q (eg: integration forwarded a payload)
         data = await self._recv_q.get()
         return data
 
     async def write_to_websocket(self, data: str):
+        print("[Nakurity Backend (Websocket)] writing to websocket")
         # data is raw string JSON. Broadcast to all connected integrations and to intermediary watchers.
         # Also allow NakurityClient (outbound) to send to real Neuro if configured (handled elsewhere).
         # Send to intermediary watchers for visibility:
@@ -62,6 +64,7 @@ class NakurityBackend(
                 self.clients.pop(name, None)
 
     def submit_call_async_soon(self, cb, *args):
+        print("[Nakurity Backend (Calls)] submmiting async calls")
         loop = asyncio.get_event_loop()
         try:
             loop.call_soon(cb, *args)
@@ -70,6 +73,7 @@ class NakurityBackend(
 
     # Called by the neuro-api when it wants to add ephemeral context
     def add_context(self, game_title: str, message: str, reply_if_not_busy: bool):
+        print("[Nakurity Backend] Received add_context command")
         # broadcast message to all watchers (neuro-os)
         coro = self.intermediary._notify_watchers({
             "event": "add_context",
@@ -89,6 +93,7 @@ class NakurityBackend(
         - actions: list of Action objects
         We will ask Neuro-OS via intermediary for a choice. Wait up to timeout seconds.
         """
+        print("[Nakurity Backend] received forced_action command")
         # create simplified actions list to send
         simple_actions = [{"name": a.name, "desc": getattr(a, "desc", "")} for a in actions]
         ask = {
