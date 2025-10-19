@@ -1,0 +1,20 @@
+{
+    "configurations": [
+        {
+            "name": "Python Debugger: src.dev.tests.test_harness (with args)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.dev.tests.test_harness",
+            "console": "integratedTerminal",
+            "args": "-m"
+        },
+        {
+            "name": "Python Debugger: src.dev.nakurity (with args)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.dev.nakurity",
+            "console": "integratedTerminal",
+            "args": "-m"
+        }
+    ]
+}
