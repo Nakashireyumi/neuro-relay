@@ -1,0 +1,134 @@
+# src/dev/nakurity/server.py
+import asyncio
+import json
+import traceback
+from typing import Optional, Tuple
+
+# these imports come from the neuro-api package
+from neuro_api.server import (
+    AbstractRecordingNeuroServerClient,
+    AbstractHandlerNeuroServerClient,
+    AbstractNeuroServerClient,
+)
+from neuro_api.command import Action
+
+from .intermediary import Intermediary
+
+"""
+Nakurity Backend acts like a Neuro backend. When Neuro-sama (or the SDK client)
+connects and asks the server to choose an action, this server asks the intermediary
+(Neuro-OS / integrations) for input or forwards contexts.
+
+You must adapt method names to the exact neuro-api version; this matches the docs you shared.
+"""
+
+class NakurityBackend(AbstractRecordingNeuroServerClient,
+                    AbstractHandlerNeuroServerClient,
+                    AbstractNeuroServerClient):
+    def __init__(self, intermediary: Intermediary):
+        super().__init__()
+        self.intermediary = intermediary
+        # attach a callback so intermediary can call into this server
+        self.intermediary.on_forward_to_neuro = self._handle_intermediary_forward
+
+    # Called by the neuro-api when it wants to add ephemeral context
+    def add_context(self, game_title: str, message: str, reply_if_not_busy: bool):
+        # broadcast message to all watchers (neuro-os)
+        coro = self.intermediary._notify_watchers({
+            "event": "add_context",
+            "game_title": game_title,
+            "message": message,
+            "reply_if_not_busy": reply_if_not_busy
+        })
+        # not awaiting on purpose; it's fire and forget
+        asyncio.create_task(coro)
+
+    # Example callback: Neuro asks server to pick action from list of actions.
+    # We forward the query to Neuro-OS and wait for a short response.
+    async def choose_force_action(self, game_title, state, query,
+                                  ephemeral_context, actions) -> Tuple[str, str]:
+        """
+        - game_title/state/query/ephemeral_context: as provided by neuro-api
+        - actions: list of Action objects
+        We will ask Neuro-OS via intermediary for a choice. Wait up to timeout seconds.
+        """
+        # create simplified actions list to send
+        simple_actions = [{"name": a.name, "desc": getattr(a, "desc", "")} for a in actions]
+        ask = {
+            "type": "choose_action_request",
+            "game_title": game_title,
+            "state": state,
+            "query": query,
+            "ephemeral_context": ephemeral_context,
+            "actions": simple_actions,
+        }
+
+        # notify watchers (so Neuro-OS UI shows the request)
+        await self.intermediary._notify_watchers({"event": "choose_action", "payload": ask})
+
+        # provide a simple async requester: intermediary.on_forward_to_neuro returns responses from integrations
+        # here we broadcast a request to all integrations and wait for the first valid reply
+        fut = asyncio.get_event_loop().create_future()
+
+        async def waiter():
+            # send the choice request to all integrations
+            await self.intermediary.broadcast({"event": "choose_action_request", "payload": ask})
+            # we then wait for any integration to send back a response via the intermediary.on_forward_to_neuro pathway
+            try:
+                # wait for up to 8 seconds for a response
+                resp = await asyncio.wait_for(self._wait_for_integration_choice(), timeout=8.0)
+                fut.set_result(resp)
+            except asyncio.TimeoutError:
+                fut.set_result(None)
+
+        # start waiting
+        asyncio.create_task(waiter())
+        resp = await fut
+
+        if resp and isinstance(resp, dict):
+            # expect {selected_action_name: "name", "data": "<json-string-or-dict>"}
+            name = resp.get("selected")
+            data = resp.get("data", "{}")
+            if isinstance(data, dict):
+                data = json.dumps(data)
+            return name, data
+
+        # fallback: choose first action
+        fallback_name = actions[0].name
+        return fallback_name, "{}"
+
+    # internal helper: create an awaitable that gets fulfilled when an integration posts a choice
+    async def _wait_for_integration_choice(self):
+        # naive implementation: watch a queue or temporary file for the first "choice" event.
+        # For skeleton, we'll create a simple queue attribute the intermediary will use.
+        if not hasattr(self, "_choice_q"):
+            self._choice_q = asyncio.Queue()
+        return await self._choice_q.get()
+
+    # this method will be called by intermediary when integration messages arrive
+    async def _handle_intermediary_forward(self, msg: dict):
+        """
+        msg: {"from_integration": "<name>", "payload": {...}}
+        If payload contains a 'choice' event, put it on the queue; otherwise, return None or an ack.
+        """
+        try:
+            payload = msg.get("payload", {})
+            # if integration replies with { "choice": {...} } we'll route it to the waiting chooser
+            if "choice" in payload:
+                choice = payload["choice"]
+                if not hasattr(self, "_choice_q"):
+                    self._choice_q = asyncio.Queue()
+                await self._choice_q.put(choice)
+                return {"accepted": True}
+
+            # generic ack for other messages
+            return {"accepted": True, "echo": payload}
+        except Exception:
+            traceback.print_exc()
+            return {"error": "forward handling failed"}
+
+    # run the neuro-api server
+    async def run_server(self, host="127.0.0.1", port=8000):
+        # neuro-api's AbstractNeuroServerClient subclass exposes .run(host,port) per docs
+        print("[Nakurity Backend] starting relay backend...")
+        await self.run(host, port)  # provided by neuro_api.server

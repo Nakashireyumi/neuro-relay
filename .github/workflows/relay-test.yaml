@@ -1,0 +1,56 @@
+name: Relay Integration Tests
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main, dev ]
+  workflow_dispatch:
+
+jobs:
+  test-relay:
+    name: Run Neuro Relay Tests
+    runs-on: ubuntu-latest
+
+    env:
+      PYTHONUNBUFFERED: 1
+      AUTH_TOKEN: super-secret-token
+      RELAY_HOST: 127.0.0.1
+      RELAY_PORT: 8765
+      NEURO_PORT: 8000
+
+    steps:
+      - name: 🧩 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install websockets pyyaml
+
+      - name: 🧠 Start Relay Intermediary
+        run: |
+          nohup python -m src.dev.nakurity > relay.log 2>&1 &
+          echo $! > relay_pid.txt
+          sleep 3
+          echo "Relay started on ws://${RELAY_HOST}:${RELAY_PORT}"
+
+      - name: 🧪 Run Test Harness
+        run: |
+          python -m src.dev.nakurity.test_harness || (cat relay.log && exit 1)
+
+      - name: 📜 Show Relay Logs
+        if: always()
+        run: cat relay.log
+
+      - name: 🧹 Cleanup
+        if: always()
+        run: |
+          if [ -f relay_pid.txt ]; then
+            kill $(cat relay_pid.txt) || true
+          fi

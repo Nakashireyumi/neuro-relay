@@ -1,0 +1,22 @@
+intermediary:
+  # Intermediary is the middleman between the Nakurity Backend and the Nakurity Client
+  host: "127.0.0.1"
+  port: 8765
+
+  # Authentication for the entire relay integration
+  auth_token: "super-secret-token"
+
+  # The queue for the neuro integration messages to be relayed back and forth
+  # (from the neuro backend to the neuro integration via the nakurity backend)
+  relay_queue: "relay_message_queue.pkl"
+
+nakurity-backend:
+  # The Nakurity Backend acts as an Neuro Backend Server, that relays information
+  #   to the real neuro backend via the intermediary server.
+
+  # This is done to help neuro manage multiple integrations connected to her at once.
+
+  # Neuro OS is meant to use Neuro Relay to help manage multiple neuro integrations being
+  #   to the neuro backend
+  host: "127.0.0.1"
+  port: 8000
