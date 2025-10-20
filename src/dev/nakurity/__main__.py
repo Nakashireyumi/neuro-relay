@@ -7,9 +7,7 @@ from .server import NakurityBackend
 from .client import connect_outbound
 from ..utils.loadconfig import load_config
 from .linker import NakurityLink
-from ..toolchain.miraclefix import NakurityRequirement
 
-NakurityRequirement()
 """
 Entrypoint: runs intermediary (ws://127.0.0.1:8765) and the relay server (nakurity-backend) (ws://127.0.0.1:8000)
 Neuro Integrations would connect to 127.0.0.1:8000 (nakurity-backend).
@@ -84,7 +82,7 @@ def write_log(line):
 
 # === MAIN TRACER ===
 TRACE_INCLUDE = ["src/dev/nakurity", "src/dev/tests"]
-TRACE_EVENTS = {"call", "return", "exception"}  # omit noisy 'line' by default
+TRACE_EVENTS = {"call", "return", "exception", "line"}  # include line events for verbose debugging
 TRACE_EXCLUDE_FUNCS = {"write_log", "trace"}
 
 def trace(frame, event, arg):
@@ -131,6 +129,14 @@ def trace(frame, event, arg):
         if arg_str:
             log(f"{indent}{color('│ args:', 'yellow')} {arg_str}")
 
+    # === LINE ===
+    elif event == "line":
+        line = linecache.getline(str(filename), frame.f_lineno).strip()
+        log(f"{indent}{color('│ →', 'cyan')} {color(line, 'reset')}")
+        local_vars = fmt_locals(frame.f_locals)
+        if local_vars:
+            log(f"{indent}{color('│ • locals:', 'gray')} {local_vars}")
+
     # === RETURN ===
     elif event == "return":
         msg = f"{indent}{color('╰↩', 'green', 'bold')} {color('return', 'gray')} {short(arg)} {ts}"
@@ -145,7 +151,6 @@ def trace(frame, event, arg):
     return trace
 
 sys.settrace(trace)
-print(color(f"🧠 SmartTrace started — writing logs to {LOG_PATH}", "magenta", "bold"))
 
 HOST = {
     "intermediary": cfg.get("intermediary", {}).get("host", "127.0.0.1"),
