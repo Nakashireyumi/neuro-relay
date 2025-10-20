@@ -271,7 +271,10 @@ class Intermediary:
             raise
 
     async def send_outbound(self, payload: dict):
-        self.nakurity_outbound_client
+        if callable(self.nakurity_outbound_client):
+            return await self.nakurity_outbound_client(payload)
+        else:
+            print("[Intermediary] No outbound client configured.")
 
     # Helpers to send messages to integrations from the server layer
     async def send_to_integration(self, name: str, payload: dict):

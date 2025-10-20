@@ -208,9 +208,6 @@ class NakurityBackend(
             traceback.print_exc()
             return {"error": "forward handling failed"}
         
-    async def send_to_neuro_client(self, client_name: str, message: dict):
-        self.intermediary.nakurity_outbound_client()
-        
     def _resolve_integration_for_action(self, action_name: str) -> Optional[str]:
         """Determine which integration owns the given action name."""
         if "." in action_name:

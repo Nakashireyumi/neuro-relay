@@ -21,6 +21,16 @@ nakurity-backend:
   host: "127.0.0.1"
   port: 8001
 
+nakurity-id:
+  # The Nakurity ID Server is supposed to be used to create a more compatible idenification
+  # environment for neuro integrations working with the Nakurity Backend, without requiring
+  # complete rewrite of the Neuro Integration for Neuro Relay.
+
+  # This is used to help the Nakurity Backend idenifiy neuro integrations better for the neuro
+  # backend, since neuro integrations can have the same name. (Also this is a http server)
+  host: "127.0.0.1"
+  port: 3032
+
 nakurity-client:
   # The Nakurity Client is the single integration that should be connected to neuro at a time
   # To allow relay messages back and forth
@@ -29,4 +39,8 @@ nakurity-client:
 
 dependency-authentication:
   neuro-os:
+    # This is the authentication token you have to set for neuro-os to use, this is the most
+    # important authentication token. Since Neuro OS has special access to the Neuro Relay
+    # Intermediary Server, Neuro OS also hosts the admin dashboard for Neuro Relay, so if this
+    # is compromised, all other neuro integrations can be compromised and misused. 
     auth_token: "super-secret-token"
