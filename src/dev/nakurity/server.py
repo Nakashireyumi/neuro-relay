@@ -110,14 +110,21 @@ class NakurityBackend(
         # notify watchers (so Neuro-OS UI shows the request)
         await self.intermediary._notify_watchers({"event": "choose_action", "payload": ask})
 
-        # provide a simple async requester: intermediary.on_forward_to_neuro returns responses from integrations
-        # here we broadcast a request to all integrations and wait for the first valid reply
+        # broadcast to connected integrations via Nakurity Backend
+        broadcast_msg = json.dumps({"event": "choose_action_request", "payload": ask})
+        for name, ws in list(self.clients.items()):
+            try:
+                await ws.send(broadcast_msg)
+                print(f"[Nakurity Backend] sent choose_action_request to {name}")
+            except Exception:
+                print(f"[Nakurity Backend] failed to send to {name}, removing.")
+                self.clients.pop(name, None)
+
+        # provide a simple async requester: wait for integration choice responses
         fut = asyncio.get_event_loop().create_future()
 
         async def waiter():
             try:
-                # send the choice request to all integrations
-                await self.intermediary.broadcast({"event": "choose_action_request", "payload": ask})
                 # we then wait for any integration to send back a response via the intermediary.on_forward_to_neuro pathway
                 
                 # wait for up to 8 seconds for a response
@@ -275,7 +282,10 @@ class NakurityBackend(
                                 data.get("ephemeral_context"),
                                 [Action(name=a.get("name", ""), description=a.get("desc", "")) for a in data.get("actions", [])]
                             )
-                            await websocket.send(json.dumps({"selected": selected, "data": sel_data}))
+                            try:
+                                await websocket.send(json.dumps({"selected": selected, "data": sel_data}))
+                            except (websockets.exceptions.ConnectionClosed, websockets.exceptions.ConnectionClosedOK):
+                                print(f"[Nakurity Backend] Client {client_name} disconnected during response")
                             continue
 
                         # Forward integration messages to Intermediary → Nakurity Client → Neuro Backend
@@ -286,10 +296,16 @@ class NakurityBackend(
                         if callable(self.intermediary.forward_to_neuro):
                             resp = await self.intermediary.forward_to_neuro(fwd)
                         if resp is not None:
-                            await websocket.send(json.dumps({"result": resp}))
-                    except Exception:
+                            try:
+                                await websocket.send(json.dumps({"result": resp}))
+                            except (websockets.exceptions.ConnectionClosed, websockets.exceptions.ConnectionClosedOK):
+                                print(f"[Nakurity Backend] Client {client_name} disconnected during response")
+                    except Exception as e:
                         traceback.print_exc()
-                        await websocket.send(json.dumps({"error": "failed to forward to relay"}))
+                        try:
+                            await websocket.send(json.dumps({"error": "failed to forward to relay"}))
+                        except (websockets.exceptions.ConnectionClosed, websockets.exceptions.ConnectionClosedOK):
+                            print(f"[Nakurity Backend] Client {client_name} disconnected during error response")
             except websockets.ConnectionClosed:
                 pass
             except Exception:
