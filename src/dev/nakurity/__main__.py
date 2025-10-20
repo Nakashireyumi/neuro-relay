@@ -99,15 +99,15 @@ def trace(frame, event, arg):
     rel = filename.relative_to(PROJECT_ROOT)
     # include-path filtering
     rel_posix = rel.as_posix()
-    if TRACE_INCLUDE and not any(p in rel_posix for p in TRACE_INCLUDE):
-        return
+    # if TRACE_INCLUDE and not any(p in rel_posix for p in TRACE_INCLUDE):
+    #     return
 
     func = frame.f_code.co_name
-    if func in TRACE_EXCLUDE_FUNCS:
-        return
+    # if func in TRACE_EXCLUDE_FUNCS:
+    #     return
 
-    if event not in TRACE_EVENTS:
-        return
+    # if event not in TRACE_EVENTS:
+    #     return
 
     depth = len(inspect.stack(0)) - 1
     indent = "│  " * (depth % MAX_STACK_DEPTH)
@@ -192,21 +192,55 @@ async def main():
     outbound_uri = f"ws://{HOST.get('nakurity-client')}:{PORT.get('nakurity-client')}"
     # create a background task which will attach a NakurityClient to the loop
     client = None
-    async def start_outbound():
-        nonlocal client
-        # pass backend forwarder so remote Neuro actions flow into our pipeline
-        client = await connect_outbound(outbound_uri, nakurity_backend._handle_intermediary_forward)
-        if client is None:
-            print("[Main] outbound client failed to connect")
-        else:
+    nk_link = None
+    reconnect_in_progress = False
+    
+    async def setup_client_and_link(new_client):
+        nonlocal nk_link, client
+        client = new_client
+        if client:
             # store client instance for later use
-            nakurity_backend.outbound_client = client  # optionally
+            nakurity_backend.outbound_client = client
             print("[Main] outbound client connected and stored")
             # set up NakurityLink tied to the connected client and attach to intermediary
             nk_link = NakurityLink(client)
             intermediary.nakurity_outbound_client = nk_link
             tasks.append(asyncio.create_task(nk_link.start()))
             print("[Main] NakurityLink attached to intermediary")
+            # Set up reconnection callback
+            client._reconnect_callback = reconnect_client
+    
+    async def reconnect_client():
+        nonlocal reconnect_in_progress, client, nk_link
+        if reconnect_in_progress:
+            return
+        reconnect_in_progress = True
+        
+        print("[Main] Connection lost, attempting to reconnect...")
+        # Clean up old client
+        if client and hasattr(client, '_reader_task') and client._reader_task:
+            client._reader_task.cancel()
+        if nk_link:
+            await nk_link.stop()
+            intermediary.nakurity_outbound_client = None
+        
+        # Attempt reconnection
+        new_client = await connect_outbound(outbound_uri, nakurity_backend._handle_intermediary_forward)
+        if new_client:
+            print("[Main] Reconnection successful")
+            await setup_client_and_link(new_client)
+        else:
+            print("[Main] Reconnection failed, relay will continue without Neuro backend")
+        
+        reconnect_in_progress = False
+    
+    async def start_outbound():
+        # pass backend forwarder so remote Neuro actions flow into our pipeline
+        new_client = await connect_outbound(outbound_uri, nakurity_backend._handle_intermediary_forward)
+        if new_client is None:
+            print("[Main] outbound client failed to connect initially, will retry on demand")
+        else:
+            await setup_client_and_link(new_client)
 
     outbound_task = asyncio.create_task(start_outbound())
     tasks.append(outbound_task)

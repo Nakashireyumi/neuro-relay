@@ -11,7 +11,7 @@ A Neuro client that connects out to a real Neuro backend.
 class NakurityClient(AbstractNeuroAPI):
     def __init__(self, websocket, router_forward_cb):
         self.websocket = websocket
-        self.name = "relay-outbound"
+        self.name = "development-relay"
         super().__init__(self.name)
         # router_forward_cb is expected to be an async callable that accepts a dict
         # e.g. intermediary._handle_intermediary_forward
@@ -28,11 +28,12 @@ class NakurityClient(AbstractNeuroAPI):
     async def initialize(self):
         # Send required startup to set game/title on backend
         await self.send_startup_command()
+        # Send development environment context
+        await self.register_environment_context()
         # Optional steps disabled to avoid schema mismatches with dev backends
         # actions_schema = await self.collect_registered_actions()
         # if actions_schema:
         #     await self.register_actions(actions_schema)
-        # await self.register_environment_context()
 
     async def handle_action(self, action: NeuroAction):
         # Actions from real Neuro backend flow back to intermediary → integrations
@@ -55,24 +56,94 @@ class NakurityClient(AbstractNeuroAPI):
 
     async def register_actions(self, actions_schema: dict):
         """Register integration actions with Neuro backend."""
+        # Convert actions_schema dict to proper Action format
+        actions_list = []
+        for action_name, action_info in actions_schema.items():
+            if isinstance(action_info, dict):
+                action = {
+                    "name": action_name,
+                    "description": action_info.get("description", f"Action: {action_name}"),
+                    "schema": action_info.get("schema")
+                }
+            else:
+                # Simple string description
+                action = {
+                    "name": action_name,
+                    "description": str(action_info) if action_info else f"Action: {action_name}",
+                    "schema": None
+                }
+            actions_list.append(action)
+        
+        if not actions_list:
+            print("[Nakurity Client] No actions to register")
+            return
+            
         payload = {
-            "op": "register_actions",
-            "actions": actions_schema
+            "command": "actions/register",
+            "game": self.name,
+            "data": {"actions": actions_list}
         }
-        print("[Nakurity Client] Registering actions schema with Neuro...")
+        print(f"[Nakurity Client] Registering {len(actions_list)} actions with Neuro backend")
         await self.send_command_data(json.dumps(payload).encode())
 
     async def register_environment_context(self):
-        """Send context about relay environment and integrations."""
-        env_context = {
-            "op": "environment_context",
-            "relay_name": self.name,
-            "relay_description": "Acts as a multiplexed integration relay.",
-            "connected_integrations": list(getattr(self.router_forward_cb, "integrations", {}).keys())
-            if hasattr(self.router_forward_cb, "integrations") else [],
+        """Send comprehensive context about the development environment to help Neuro understand this isn't a game."""
+        
+        # Initial development environment explanation
+        context_messages = [
+            {
+                "command": "context",
+                "game": self.name,
+                "data": {
+                    "message": "🔧 DEVELOPMENT ENVIRONMENT ACTIVE: This is not a game integration. You are connected to a development relay system that allows testing and debugging of multiple game integrations simultaneously. This relay acts as a bridge between your Neuro backend and various development integrations.",
+                    "silent": False
+                }
+            },
+            {
+                "command": "context", 
+                "game": self.name,
+                "data": {
+                    "message": "🎮 INTEGRATION TESTING MODE: When you receive commands from this relay, they are coming from developers testing their game integrations. You may see test commands, mock data, or experimental features. Please respond as you normally would to help validate the integration behavior.",
+                    "silent": False
+                }
+            },
+            {
+                "command": "context",
+                "game": self.name, 
+                "data": {
+                    "message": "⚡ RELAY FUNCTIONALITY: This development relay can forward actions between multiple connected integrations and your backend. If you choose actions or respond to events, they will be routed to the appropriate integration for testing purposes.",
+                    "silent": False
+                }
+            },
+            {
+                "command": "context",
+                "game": self.name,
+                "data": {
+                    "message": "🛠️ DEVELOPER NOTE: This connection helps developers ensure their integrations work correctly with your systems before going live. Your responses help validate proper communication flows and action handling.",
+                    "silent": True
+                }
+            }
+        ]
+        
+        # Send each context message quickly for testing
+        for i, context in enumerate(context_messages):
+            await self.send_command_data(json.dumps(context).encode())
+            print(f"[Nakurity Client] Sent development context message {i+1}/{len(context_messages)}")
+            # Very small delay only to prevent overwhelming the connection
+            if i < len(context_messages) - 1:
+                await asyncio.sleep(0.05)
+        
+        # Send a final completion signal
+        completion_payload = {
+            "command": "context",
+            "game": self.name,
+            "data": {
+                "message": "✅ DEV: Development relay context setup complete - ready for integration testing",
+                "silent": True
+            }
         }
-        await self.send_command_data(json.dumps(env_context).encode())
-        print("[Nakurity Client] Sent environment context to Neuro.")
+        await self.send_command_data(json.dumps(completion_payload).encode())
+        print("[Nakurity Client] Completed development environment context setup.")
 
     async def on_connect(self):
         print("[Nakurity Client] connected")
@@ -90,22 +161,36 @@ class NakurityClient(AbstractNeuroAPI):
                 await self.read_message()
         except websockets.exceptions.ConnectionClosed:
             print("[Nakurity Client] connection closed")
+            # Signal that reconnection is needed
+            if hasattr(self, '_reconnect_callback'):
+                asyncio.create_task(self._reconnect_callback())
         except Exception as e:
             print("[Nakurity Client] read loop exception:", e)
+            # Signal that reconnection is needed
+            if hasattr(self, '_reconnect_callback'):
+                asyncio.create_task(self._reconnect_callback())
 
-async def connect_outbound(uri: str, router_forward_cb):
+async def connect_outbound(uri: str, router_forward_cb, max_retries: int = 10, retry_delay: float = 2.0):
     """
-    Connect to the real neuro backend and return NakurityClient instance.
+    Connect to the real neuro backend and return NakurityClient instance with retry logic.
     This function will create a background read loop for the websocket.
     """
-    print("[Nakurity Client] trying to connect to the Neuro Backend")
-    try:
-        ws = await websockets.connect(uri)
-    except Exception as e:
-        print("[Nakurity Client] failed to connect to:", uri)
-        print(e)
-        # TODO: implement retry attempts
-        return None
+    for attempt in range(max_retries):
+        print(f"[Nakurity Client] trying to connect to Neuro Backend (attempt {attempt + 1}/{max_retries})")
+        try:
+            ws = await websockets.connect(uri)
+            print(f"[Nakurity Client] successfully connected to {uri}")
+            break
+        except Exception as e:
+            if attempt == max_retries - 1:
+                print(f"[Nakurity Client] failed to connect after {max_retries} attempts: {uri}")
+                print(f"[Nakurity Client] final error: {e}")
+                return None
+            else:
+                delay = retry_delay * (2 ** min(attempt, 6))  # Exponential backoff, max 128s
+                print(f"[Nakurity Client] connection failed: {e}")
+                print(f"[Nakurity Client] retrying in {delay:.1f}s...")
+                await asyncio.sleep(delay)
 
     try:
         print("[Nakurity Client] starting connection to neuro backend", uri)

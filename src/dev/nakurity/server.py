@@ -272,29 +272,38 @@ class NakurityBackend(
                             "name": client_name
                         })
 
-                    # Handle Neuro-API like operations
+                    # Forward all messages to Intermediary → Nakurity Client → Neuro Backend (pure relay)
                     try:
-                        if data.get("op") == "choose_force_action":
-                            selected, sel_data = await self.choose_force_action(
-                                data.get("game_title"),
-                                data.get("state"),
-                                data.get("query"),
-                                data.get("ephemeral_context"),
-                                [Action(name=a.get("name", ""), description=a.get("desc", "")) for a in data.get("actions", [])]
-                            )
-                            try:
-                                await websocket.send(json.dumps({"selected": selected, "data": sel_data}))
-                            except (websockets.exceptions.ConnectionClosed, websockets.exceptions.ConnectionClosedOK):
-                                print(f"[Nakurity Backend] Client {client_name} disconnected during response")
-                            continue
-
-                        # Forward integration messages to Intermediary → Nakurity Client → Neuro Backend
-                        fwd = {"from_integration": client_name, "payload": data}
-                        
-                        # Forward to Intermediary which will route to Nakurity Client → Neuro Backend
-                        resp = None
-                        if callable(self.intermediary.forward_to_neuro):
-                            resp = await self.intermediary.forward_to_neuro(fwd)
+                        # Check if this is an action registration
+                        if data.get("event") == "register_actions":
+                            print(f"[Nakurity Backend] {client_name} registering actions")
+                            actions_schema = data.get("actions", {})
+                            
+                            # Store locally in intermediary for multiplexing
+                            self.intermediary.action_registry[client_name] = actions_schema
+                            
+                            # Forward to real Neuro backend via NakurityLink
+                            if hasattr(self.intermediary, "nakurity_outbound_client") and self.intermediary.nakurity_outbound_client:
+                                await self.intermediary.nakurity_outbound_client.register_actions({
+                                    "actions": actions_schema
+                                })
+                                print(f"[Nakurity Backend] forwarded {client_name} actions to Neuro backend")
+                            
+                            resp = {"status": "actions_registered"}
+                        else:
+                            # Forward regular messages through Intermediary → Nakurity Client → Neuro Backend
+                            print(f"[Nakurity Backend] forwarding {client_name} message to Neuro backend via Intermediary")
+                            
+                            # Send directly to NakurityLink for forwarding to real Neuro backend
+                            if hasattr(self.intermediary, "nakurity_outbound_client") and self.intermediary.nakurity_outbound_client:
+                                await self.intermediary.nakurity_outbound_client.send_event({
+                                    "event": "integration_message", 
+                                    "from": client_name,
+                                    "data": data
+                                })
+                                resp = {"status": "forwarded_to_neuro"}
+                            else:
+                                resp = {"error": "neuro backend not available"}
                         if resp is not None:
                             try:
                                 await websocket.send(json.dumps({"result": resp}))

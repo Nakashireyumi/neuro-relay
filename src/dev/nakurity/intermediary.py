@@ -94,7 +94,9 @@ class Intermediary:
             return None
 
         token = meta.get("auth_token")
-        if token != AUTH_TOKEN:
+        # Check auth: either regular token or neuro-os special token
+        neuro_os_token = cfg.get("dependency-authentication", {}).get("neuro-os", {}).get("auth_token")
+        if token != AUTH_TOKEN and token != neuro_os_token:
             await ws.send(json.dumps({"error": "invalid auth token"}))
             await ws.close()
             return None
@@ -111,11 +113,14 @@ class Intermediary:
             return {"type": "integration", "name": name}
         elif typ == "neuro-os":
             self.watchers[name] = ws
+            # Check if Neuro OS has special auth token for enhanced privileges
+            has_special_privileges = (token == neuro_os_token)
             await self._notify_watchers({
                 "event": "neuroos_connected",
-                "name": name
+                "name": name,
+                "privileges": "enhanced" if has_special_privileges else "standard"
             })
-            return {"type": "neuro-os", "name": name}
+            return {"type": "neuro-os", "name": name, "privileges": has_special_privileges}
         else:
             await ws.send(json.dumps({"error": "unknown registration type"}))
             return None
@@ -183,6 +188,7 @@ class Intermediary:
                 if hasattr(self, "nakurity_outbound_client") and self.nakurity_outbound_client:
                     await self.nakurity_outbound_client.send_event({
                         "event": "integration_message",
+                        "from": origin_name,
                         "data": payload
                     })
                     print(f"[Intermediary] sent to Nakurity Client")
@@ -195,6 +201,8 @@ class Intermediary:
         Watcher (Neuro-OS) -> Relay
         Watchers may send commands to integrations through the relay:
           {"target":"spotify", "cmd":{"action":"play","params":{...}}}
+        Enhanced Neuro-OS can also send messages directly to Neuro backend:
+          {"direct_to_neuro": true, "payload": {...}}
         """
         async for raw in ws:
             try:
@@ -203,6 +211,26 @@ class Intermediary:
                 await ws.send(json.dumps({"error": "watcher messages must be JSON"}))
                 continue
 
+            # Check for direct-to-neuro message (enhanced privilege)
+            if payload.get("direct_to_neuro") and payload.get("payload"):
+                print(f"[Intermediary] {watcher_name} sending direct message to Neuro backend")
+                # Forward directly to Nakurity Client → Neuro Backend
+                try:
+                    if hasattr(self, "nakurity_outbound_client") and self.nakurity_outbound_client:
+                        await self.nakurity_outbound_client.send_event({
+                            "event": "neuroos_direct_message",
+                            "from": watcher_name,
+                            "data": payload["payload"]
+                        })
+                        await ws.send(json.dumps({"status": "forwarded_to_neuro"}))
+                    else:
+                        await ws.send(json.dumps({"error": "neuro backend not available"}))
+                except Exception:
+                    traceback.print_exc()
+                    await ws.send(json.dumps({"error": "failed to forward to neuro backend"}))
+                continue
+
+            # Regular integration targeting
             target = payload.get("target")
             cmd = payload.get("cmd")
             if target and cmd and target in self.integrations:
