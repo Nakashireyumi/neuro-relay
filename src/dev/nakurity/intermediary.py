@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional
 import websockets
 from websockets.server import WebSocketServerProtocol
 from ..utils.loadconfig import load_config
+from .linker import NakurityLink
 
 """
 Intermediary WebSocket server:
@@ -53,7 +54,7 @@ class Intermediary:
         # from the Nakurity Backend.
         self.action_registry: Dict[str, Dict[str, Any]] = {}
 
-        self.nakurity_outbound_client = None
+        self.nakurity_outbound_client: NakurityLink
 
     def _load_persisted_queue(self):
         if QUEUE_FILE.exists():
@@ -164,7 +165,7 @@ class Intermediary:
 
             # Check for action registration
             if payload.get("event") == "register_actions":
-                schema = payload.get("actions", {})
+                schema = payload.get("actions", [])
                 self.action_registry[origin_name] = schema
                 print(f"[Intermediary] Registered actions from {origin_name}: {list(schema.keys())}")
                 await self._notify_watchers({
@@ -172,6 +173,7 @@ class Intermediary:
                     "from": origin_name,
                     "actions": list(schema.keys())
                 })
+                self.nakurity_outbound_client.nakurity_client.register_actions(schema)
                 continue
             
             print(f"[Intermediary] forwarding payload from {origin_name} to nakurity_outbound_client: {payload!r}")

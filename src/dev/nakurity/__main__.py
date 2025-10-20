@@ -6,6 +6,7 @@ from .intermediary import Intermediary
 from .server import NakurityBackend
 from .client import connect_outbound
 from ..utils.loadconfig import load_config
+from .linker import NakurityLink
 
 """
 Entrypoint: runs intermediary (ws://127.0.0.1:8765) and the relay server (nakurity-backend) (ws://127.0.0.1:8000)
@@ -169,6 +170,7 @@ async def main():
     # are forwarded into the relay pipeline.
     outbound_uri = f"ws://{HOST.get('nakurity-client')}:{PORT.get('nakurity-client')}"
     # create a background task which will attach a NakurityClient to the loop
+    client = None
     async def start_outbound():
         # pass intermediary._handle_intermediary_forward as the router callback
         # so remote Neuro actions are fed into our backend pipeline
@@ -177,7 +179,6 @@ async def main():
             print("[Main] outbound client failed to connect")
         else:
             # store client instance for later use, but do NOT overwrite intermediary.nakurity_outbound_client
-            intermediary.nakurity_outbound_client = client
             nakurity_backend.outbound_client = client  # optionally
             print("[Main] outbound client connected and stored")
             print("[Main] intermediary.nakurity_outbound_client is", intermediary.nakurity_outbound_client)
@@ -185,6 +186,11 @@ async def main():
 
     outbound_task = asyncio.create_task(start_outbound())
     tasks.append(outbound_task)
+
+    nakurity_link = NakurityLink(client)
+    link_task = asyncio.create_task(await nakurity_link.start())
+    tasks.append(link_task)
+    intermediary.nakurity_outbound_client = nakurity_link
 
     # graceful shutdown (cross-platform)
     loop = asyncio.get_event_loop()

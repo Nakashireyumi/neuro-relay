@@ -195,11 +195,11 @@ class NakurityBackend(
                     })
                     return {"forwarded_to": integration_name}
                 
-            if "from_integration" in msg:
-                origin = msg["from_integration"]
+            # if "from_integration" in msg:
+            #     origin = msg["from_integration"]
 
-                if origin in self.clients:
-                    await self.send_to_neuro_client(origin, payload)
+            #     if origin in self.clients:
+            #         await self.intermediary.
 
             # push message into read queue
             await self._recv_q.put(json.dumps(payload))
@@ -207,9 +207,6 @@ class NakurityBackend(
         except Exception:
             traceback.print_exc()
             return {"error": "forward handling failed"}
-        
-    async def send_to_neuro_client(self, client_name: str, message: dict):
-        self.intermediary.nakurity_outbound_client()
         
     def _resolve_integration_for_action(self, action_name: str) -> Optional[str]:
         """Determine which integration owns the given action name."""
