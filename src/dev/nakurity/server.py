@@ -32,12 +32,14 @@ class NakurityBackend(
     def __init__(self, intermediary: Intermediary):
         super().__init__()
         self.intermediary = intermediary
-        # attach a callback so intermediary can call into this server
-        self.intermediary.nakurity_outbound_client = self._handle_intermediary_forward
+        # attach callbacks so intermediary can forward messages into this server
+        # keep legacy attr for backwards-compat, but the active hook is forward_to_neuro
+        self.intermediary.nakurity_outbound_client = getattr(self.intermediary, "nakurity_outbound_client", None)
+        self.intermediary.forward_to_neuro = self._handle_intermediary_forward
         # Inbound queue
         self._recv_q = asyncio.Queue()
         # Neuro Integration Clients list
-        self.clients: dict[str, websockets.WebSocketServerProtocol] = {} 
+        self.clients: dict[str, websockets.WebSocketServerProtocol] = {}
         print("[Nakurity Backend] has initialized.")
 
     async def read_from_websocket(self) -> str:
@@ -263,12 +265,28 @@ class NakurityBackend(
                             "name": client_name
                         })
 
-                    # forward to intermediary using the same shape used in other paths:
-                    fwd = {"from_integration": client_name, "payload": data}
+                    # Handle Neuro-API like operations
                     try:
-                        resp = await self.intermediary._handler
+                        if data.get("op") == "choose_force_action":
+                            selected, sel_data = await self.choose_force_action(
+                                data.get("game_title"),
+                                data.get("state"),
+                                data.get("query"),
+                                data.get("ephemeral_context"),
+                                [Action(name=a.get("name", ""), description=a.get("desc", "")) for a in data.get("actions", [])]
+                            )
+                            await websocket.send(json.dumps({"selected": selected, "data": sel_data}))
+                            continue
+
+                        # Forward integration messages to Intermediary → Nakurity Client → Neuro Backend
+                        fwd = {"from_integration": client_name, "payload": data}
+                        
+                        # Forward to Intermediary which will route to Nakurity Client → Neuro Backend
+                        resp = None
+                        if callable(self.intermediary.forward_to_neuro):
+                            resp = await self.intermediary.forward_to_neuro(fwd)
                         if resp is not None:
-                            await websocket.send(json.dumps({"result": resp}))    
+                            await websocket.send(json.dumps({"result": resp}))
                     except Exception:
                         traceback.print_exc()
                         await websocket.send(json.dumps({"error": "failed to forward to relay"}))

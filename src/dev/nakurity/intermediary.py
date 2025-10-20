@@ -165,7 +165,7 @@ class Intermediary:
 
             # Check for action registration
             if payload.get("event") == "register_actions":
-                schema = payload.get("actions", [])
+                schema = payload.get("actions", {})
                 self.action_registry[origin_name] = schema
                 print(f"[Intermediary] Registered actions from {origin_name}: {list(schema.keys())}")
                 await self._notify_watchers({
@@ -173,23 +173,22 @@ class Intermediary:
                     "from": origin_name,
                     "actions": list(schema.keys())
                 })
-                self.nakurity_outbound_client.nakurity_client.register_actions(schema)
+                # keep registration local for multiplexing; do not forward to real Neuro here
                 continue
             
-            print(f"[Intermediary] forwarding payload from {origin_name} to nakurity_outbound_client: {payload!r}")
-            # If the relay layer has a callback to forward to Neuro, call it and send back result
-            if callable(self.forward_to_neuro):
-                try:
-                    resp = await self.forward_to_neuro({
-                        "from_integration": origin_name,
-                        "payload": payload
+            print(f"[Intermediary] forwarding payload from {origin_name} to Nakurity Client → Neuro Backend: {payload!r}")
+
+            # Forward to the real Neuro backend via Nakurity Client (outbound)
+            try:
+                if hasattr(self, "nakurity_outbound_client") and self.nakurity_outbound_client:
+                    await self.nakurity_outbound_client.send_event({
+                        "event": "integration_message",
+                        "data": payload
                     })
-                    # return result to integration if something returned
-                    if resp is not None:
-                        await ws.send(json.dumps({"result": resp}))
-                except Exception:
-                    traceback.print_exc()
-                    await ws.send(json.dumps({"error": "relay->neuro forward failed"}))
+                    print(f"[Intermediary] sent to Nakurity Client")
+            except Exception:
+                traceback.print_exc()
+                await ws.send(json.dumps({"error": "failed to forward to neuro backend"}))
 
     async def _handle_watcher_msg(self, watcher_name: str, ws: WebSocketServerProtocol):
         """

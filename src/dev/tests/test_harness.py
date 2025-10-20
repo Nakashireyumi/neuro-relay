@@ -6,26 +6,36 @@ import websockets
 AUTH_TOKEN = "super-secret-token"
 
 async def fake_integration():
-    uri = "ws://127.0.0.1:8765"
+    # Connect to Nakurity Backend (not Intermediary) - this is the correct pipeline
+    uri = "ws://127.0.0.1:8001"
     async with websockets.connect(uri) as ws:
+        # Send a startup message to identify as spotify integration
         await ws.send(json.dumps({
-            "type": "integration",
-            "name": "spotify",
-            "auth_token": AUTH_TOKEN
+            "game": "spotify",
+            "status": "ready"
         }))
-        # listen for action request from Neuro relay
+        
+        # listen for messages from Nakurity Backend
         async for msg in ws:
-            data = json.loads(msg)
-            if data.get("event") == "choose_action_request":
-                choice = {
-                    "choice": {
-                        "selected": data["payload"]["actions"][0]["name"],
-                        "data": {"volume": 50}
-                    }
-                }
-                await ws.send(json.dumps(choice))
-                print("[Integration] sent choice")
-                break
+            try:
+                data = json.loads(msg)
+                print(f"[Integration] received: {data}")
+                
+                # Look for choose_action broadcast from Nakurity Backend
+                if data.get("event") == "choose_action_request" and "payload" in data:
+                    payload = data["payload"]
+                    if payload.get("type") == "choose_action_request" and payload.get("actions"):
+                        choice = {
+                            "choice": {
+                                "selected": payload["actions"][0]["name"],
+                                "data": {"volume": 50}
+                            }
+                        }
+                        await ws.send(json.dumps(choice))
+                        print("[Integration] sent choice")
+                        break
+            except json.JSONDecodeError:
+                print(f"[Integration] received non-JSON: {msg}")
 
 async def fake_watcher():
     uri = "ws://127.0.0.1:8765"

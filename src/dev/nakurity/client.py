@@ -26,18 +26,19 @@ class NakurityClient(AbstractNeuroAPI):
         return await self.websocket.recv()
 
     async def initialize(self):
+        # Send required startup to set game/title on backend
         await self.send_startup_command()
-        # Collect and register actions from intermediary
-        actions_schema = await self.collect_registered_actions()
-        if actions_schema:
-            await self.register_actions(actions_schema)
-        # Send environment context to Neuro
-        await self.register_environment_context()
+        # Optional steps disabled to avoid schema mismatches with dev backends
+        # actions_schema = await self.collect_registered_actions()
+        # if actions_schema:
+        #     await self.register_actions(actions_schema)
+        # await self.register_environment_context()
 
     async def handle_action(self, action: NeuroAction):
-        # forward to intermediary
+        # Actions from real Neuro backend flow back to intermediary → integrations
+        print(f"[Nakurity Client] received action from Neuro: {action.name}")
         await self.router_forward_cb({
-            "from_neuro_outbound": True,
+            "from_neuro_backend": True,
             "action": action.name,
             "data": json.loads(action.data or "{}"),
             "id": action.id_

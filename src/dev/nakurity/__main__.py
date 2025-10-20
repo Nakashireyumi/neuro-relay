@@ -7,7 +7,9 @@ from .server import NakurityBackend
 from .client import connect_outbound
 from ..utils.loadconfig import load_config
 from .linker import NakurityLink
+from ..toolchain.miraclefix import NakurityRequirement
 
+NakurityRequirement()
 """
 Entrypoint: runs intermediary (ws://127.0.0.1:8765) and the relay server (nakurity-backend) (ws://127.0.0.1:8000)
 Neuro Integrations would connect to 127.0.0.1:8000 (nakurity-backend).
@@ -81,22 +83,44 @@ def write_log(line):
         f.write(line + "\n")
 
 # === MAIN TRACER ===
+TRACE_INCLUDE = ["src/dev/nakurity", "src/dev/tests"]
+TRACE_EVENTS = {"call", "return", "exception"}  # omit noisy 'line' by default
+TRACE_EXCLUDE_FUNCS = {"write_log", "trace"}
+
 def trace(frame, event, arg):
-    filename = Path(frame.f_code.co_filename).resolve()
+    try:
+        filename = Path(frame.f_code.co_filename).resolve()
+    except Exception:
+        return  # during shutdown, modules may be gone
+
     try:
         filename.relative_to(PROJECT_ROOT)
     except ValueError:
         return  # Skip non-project files
 
     rel = filename.relative_to(PROJECT_ROOT)
+    # include-path filtering
+    rel_posix = rel.as_posix()
+    if TRACE_INCLUDE and not any(p in rel_posix for p in TRACE_INCLUDE):
+        return
+
     func = frame.f_code.co_name
+    if func in TRACE_EXCLUDE_FUNCS:
+        return
+
+    if event not in TRACE_EVENTS:
+        return
+
     depth = len(inspect.stack(0)) - 1
     indent = "│  " * (depth % MAX_STACK_DEPTH)
     ts = f"[{now()}]" if SHOW_TIMESTAMP else ""
 
     def log(msg):
-        print(msg)
-        write_log(msg)
+        try:
+            print(msg)
+            write_log(msg)
+        except Exception:
+            pass
 
     # === CALL ===
     if event == "call":
@@ -106,14 +130,6 @@ def trace(frame, event, arg):
         log(header)
         if arg_str:
             log(f"{indent}{color('│ args:', 'yellow')} {arg_str}")
-
-    # === LINE ===
-    elif event == "line":
-        line = linecache.getline(str(filename), frame.f_lineno).strip()
-        log(f"{indent}{color('│ →', 'cyan')} {color(line, 'reset')}")
-        local_vars = fmt_locals(frame.f_locals)
-        if local_vars:
-            log(f"{indent}{color('│ • locals:', 'gray')} {local_vars}")
 
     # === RETURN ===
     elif event == "return":
@@ -172,25 +188,23 @@ async def main():
     # create a background task which will attach a NakurityClient to the loop
     client = None
     async def start_outbound():
-        # pass intermediary._handle_intermediary_forward as the router callback
-        # so remote Neuro actions are fed into our backend pipeline
+        nonlocal client
+        # pass backend forwarder so remote Neuro actions flow into our pipeline
         client = await connect_outbound(outbound_uri, nakurity_backend._handle_intermediary_forward)
         if client is None:
             print("[Main] outbound client failed to connect")
         else:
-            # store client instance for later use, but do NOT overwrite intermediary.nakurity_outbound_client
+            # store client instance for later use
             nakurity_backend.outbound_client = client  # optionally
             print("[Main] outbound client connected and stored")
-            print("[Main] intermediary.nakurity_outbound_client is", intermediary.nakurity_outbound_client)
-            print("[Main] nakurity_backend._handle_intermediary_forward is", nakurity_backend._handle_intermediary_forward)
+            # set up NakurityLink tied to the connected client and attach to intermediary
+            nk_link = NakurityLink(client)
+            intermediary.nakurity_outbound_client = nk_link
+            tasks.append(asyncio.create_task(nk_link.start()))
+            print("[Main] NakurityLink attached to intermediary")
 
     outbound_task = asyncio.create_task(start_outbound())
     tasks.append(outbound_task)
-
-    nakurity_link = NakurityLink(client)
-    link_task = asyncio.create_task(await nakurity_link.start())
-    tasks.append(link_task)
-    intermediary.nakurity_outbound_client = nakurity_link
 
     # graceful shutdown (cross-platform)
     loop = asyncio.get_event_loop()
