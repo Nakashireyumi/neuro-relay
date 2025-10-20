@@ -266,10 +266,9 @@ class NakurityBackend(
                     # forward to intermediary using the same shape used in other paths:
                     fwd = {"from_integration": client_name, "payload": data}
                     try:
-                        resp = await self.intermediary.nakurity_outbound_client(fwd) if callable(self.intermediary.nakurity_outbound_client) else None
-                        # send ack back to client if intermediary returned something
+                        resp = await self.intermediary._handler
                         if resp is not None:
-                            await websocket.send(json.dumps({"result": resp}))
+                            await websocket.send(json.dumps({"result": resp}))    
                     except Exception:
                         traceback.print_exc()
                         await websocket.send(json.dumps({"error": "failed to forward to relay"}))
