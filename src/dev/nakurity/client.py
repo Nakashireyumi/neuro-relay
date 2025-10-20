@@ -2,13 +2,13 @@
 import json
 import websockets
 import asyncio
-from neuro_api.api import AbstractNeuroAPI, NeuroAction
+from neuro_api.api import AbstractNeuroAPIClient, NeuroAction
 
 """
 A Neuro client that connects out to a real Neuro backend.
 """
 
-class NakurityClient(AbstractNeuroAPI):
+class NakurityClient(AbstractNeuroAPIClient):
     def __init__(self, websocket, router_forward_cb):
         self.websocket = websocket
         self.name = "relay-outbound"
@@ -78,10 +78,6 @@ class NakurityClient(AbstractNeuroAPI):
 
     async def on_disconnect(self):
         print("[Nakurity Client] disconnected")
-
-    async def send_to_neuro(self, command_bytes: bytes):
-        """Send formatted neuro command bytes to the real neuro backend."""
-        await self.send_command_data(command_bytes)
     
     async def _read_loop(self):
         try:
