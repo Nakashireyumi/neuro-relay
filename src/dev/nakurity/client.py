@@ -11,7 +11,7 @@ A Neuro client that connects out to a real Neuro backend.
 class NakurityClient(AbstractNeuroAPI):
     def __init__(self, websocket, router_forward_cb):
         self.websocket = websocket
-        self.name = "development-relay"
+        self.name = "neuro-relay"
         super().__init__(self.name)
         # router_forward_cb is expected to be an async callable that accepts a dict
         # e.g. intermediary._handle_intermediary_forward
@@ -28,8 +28,6 @@ class NakurityClient(AbstractNeuroAPI):
     async def initialize(self):
         # Send required startup to set game/title on backend
         await self.send_startup_command()
-        # Send development environment context
-        await self.register_environment_context()
         # Optional steps disabled to avoid schema mismatches with dev backends
         # actions_schema = await self.collect_registered_actions()
         # if actions_schema:
@@ -86,64 +84,6 @@ class NakurityClient(AbstractNeuroAPI):
         print(f"[Nakurity Client] Registering {len(actions_list)} actions with Neuro backend")
         await self.send_command_data(json.dumps(payload).encode())
 
-    async def register_environment_context(self):
-        """Send comprehensive context about the development environment to help Neuro understand this isn't a game."""
-        
-        # Initial development environment explanation
-        context_messages = [
-            {
-                "command": "context",
-                "game": self.name,
-                "data": {
-                    "message": "🔧 DEVELOPMENT ENVIRONMENT ACTIVE: This is not a game integration. You are connected to a development relay system that allows testing and debugging of multiple game integrations simultaneously. This relay acts as a bridge between your Neuro backend and various development integrations.",
-                    "silent": False
-                }
-            },
-            {
-                "command": "context", 
-                "game": self.name,
-                "data": {
-                    "message": "🎮 INTEGRATION TESTING MODE: When you receive commands from this relay, they are coming from developers testing their game integrations. You may see test commands, mock data, or experimental features. Please respond as you normally would to help validate the integration behavior.",
-                    "silent": False
-                }
-            },
-            {
-                "command": "context",
-                "game": self.name, 
-                "data": {
-                    "message": "⚡ RELAY FUNCTIONALITY: This development relay can forward actions between multiple connected integrations and your backend. If you choose actions or respond to events, they will be routed to the appropriate integration for testing purposes.",
-                    "silent": False
-                }
-            },
-            {
-                "command": "context",
-                "game": self.name,
-                "data": {
-                    "message": "🛠️ DEVELOPER NOTE: This connection helps developers ensure their integrations work correctly with your systems before going live. Your responses help validate proper communication flows and action handling.",
-                    "silent": True
-                }
-            }
-        ]
-        
-        # Send each context message quickly for testing
-        for i, context in enumerate(context_messages):
-            await self.send_command_data(json.dumps(context).encode())
-            print(f"[Nakurity Client] Sent development context message {i+1}/{len(context_messages)}")
-            # Very small delay only to prevent overwhelming the connection
-            if i < len(context_messages) - 1:
-                await asyncio.sleep(0.05)
-        
-        # Send a final completion signal
-        completion_payload = {
-            "command": "context",
-            "game": self.name,
-            "data": {
-                "message": "✅ DEV: Development relay context setup complete - ready for integration testing",
-                "silent": True
-            }
-        }
-        await self.send_command_data(json.dumps(completion_payload).encode())
-        print("[Nakurity Client] Completed development environment context setup.")
 
     async def on_connect(self):
         print("[Nakurity Client] connected")

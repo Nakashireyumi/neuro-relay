@@ -78,38 +78,38 @@ class NakurityLink:
                             # For other integration messages, send as context with better formatting
                             if payload_data.get("command") == "startup":
                                 game_title = payload_data.get("game", "unknown-game")
-                                message = f"🎮 DEV: Integration '{from_integration}' testing connection with game '{game_title}'"
+                                message = f"🎮 Integration '{from_integration}' connected with game '{game_title}'"
                             elif payload_data.get("status") == "ready":
                                 game_title = payload_data.get("game", from_integration)
-                                message = f"✅ DEV: Integration '{game_title}' is ready for testing in development relay"
+                                message = f"✅ Integration '{game_title}' is ready via relay"
                             else:
-                                message = f"📨 DEV: Message from integration '{from_integration}': {__import__('json').dumps(payload_data)}"
+                                message = f"📨 Message from integration '{from_integration}': {__import__('json').dumps(payload_data)}"
                             
                             payload = {
                                 "command": "context",
                                 "game": self.nakurity_client.name,
                                 "data": {
                                     "message": message,
-                                    "silent": False  # Make integration messages visible for development context
+                                    "silent": True  # Keep integration messages quieter
                                 }
                             }
                     else:
                         # For other event types, send as context with better formatting
                         if event_type == "integration_connected":
-                            message = f"🔌 DEV: Integration '{from_integration}' connected to development relay for testing"
+                            message = f"🔌 Integration '{from_integration}' connected to relay"
                         elif event_type == "integration_disconnected":
-                            message = f"🔌 DEV: Integration '{from_integration}' disconnected from development relay"
+                            message = f"🔌 Integration '{from_integration}' disconnected from relay"
                         elif event_type == "action_test":
-                            message = f"🧪 DEV: Testing action '{payload_data.get('action', 'unknown')}' from integration '{from_integration}'"
+                            message = f"🧪 Testing action '{payload_data.get('action', 'unknown')}' from integration '{from_integration}'"
                         else:
-                            message = f"📡 DEV: Event '{event_type}' from integration '{from_integration}': {__import__('json').dumps(payload_data)}"
+                            message = f"📡 Event '{event_type}' from integration '{from_integration}': {__import__('json').dumps(payload_data)}"
                         
                         payload = {
                             "command": "context",
                             "game": self.nakurity_client.name,
                             "data": {
                                 "message": message,
-                                "silent": False  # Make dev events visible so Neuro understands what's happening
+                                "silent": True  # Keep events quieter in production
                             }
                         }
                     
