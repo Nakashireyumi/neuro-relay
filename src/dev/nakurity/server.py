@@ -32,12 +32,14 @@ class NakurityBackend(
     def __init__(self, intermediary: Intermediary):
         super().__init__()
         self.intermediary = intermediary
-        # attach a callback so intermediary can call into this server
-        self.intermediary.nakurity_outbound_client = self._handle_intermediary_forward
+        # attach callbacks so intermediary can forward messages into this server
+        # keep legacy attr for backwards-compat, but the active hook is forward_to_neuro
+        self.intermediary.nakurity_outbound_client = getattr(self.intermediary, "nakurity_outbound_client", None)
+        self.intermediary.forward_to_neuro = self._handle_intermediary_forward
         # Inbound queue
         self._recv_q = asyncio.Queue()
         # Neuro Integration Clients list
-        self.clients: dict[str, websockets.WebSocketServerProtocol] = {} 
+        self.clients: dict[str, websockets.WebSocketServerProtocol] = {}
         print("[Nakurity Backend] has initialized.")
 
     async def read_from_websocket(self) -> str:
@@ -108,14 +110,21 @@ class NakurityBackend(
         # notify watchers (so Neuro-OS UI shows the request)
         await self.intermediary._notify_watchers({"event": "choose_action", "payload": ask})
 
-        # provide a simple async requester: intermediary.on_forward_to_neuro returns responses from integrations
-        # here we broadcast a request to all integrations and wait for the first valid reply
+        # broadcast to connected integrations via Nakurity Backend
+        broadcast_msg = json.dumps({"event": "choose_action_request", "payload": ask})
+        for name, ws in list(self.clients.items()):
+            try:
+                await ws.send(broadcast_msg)
+                print(f"[Nakurity Backend] sent choose_action_request to {name}")
+            except Exception:
+                print(f"[Nakurity Backend] failed to send to {name}, removing.")
+                self.clients.pop(name, None)
+
+        # provide a simple async requester: wait for integration choice responses
         fut = asyncio.get_event_loop().create_future()
 
         async def waiter():
             try:
-                # send the choice request to all integrations
-                await self.intermediary.broadcast({"event": "choose_action_request", "payload": ask})
                 # we then wait for any integration to send back a response via the intermediary.on_forward_to_neuro pathway
                 
                 # wait for up to 8 seconds for a response
@@ -195,11 +204,11 @@ class NakurityBackend(
                     })
                     return {"forwarded_to": integration_name}
                 
-            if "from_integration" in msg:
-                origin = msg["from_integration"]
+            # if "from_integration" in msg:
+            #     origin = msg["from_integration"]
 
-                if origin in self.clients:
-                    await self.send_to_neuro_client(origin, payload)
+            #     if origin in self.clients:
+            #         await self.intermediary.
 
             # push message into read queue
             await self._recv_q.put(json.dumps(payload))
@@ -207,9 +216,6 @@ class NakurityBackend(
         except Exception:
             traceback.print_exc()
             return {"error": "forward handling failed"}
-        
-    async def send_to_neuro_client(self, client_name: str, message: dict):
-        self.intermediary.nakurity_outbound_client()
         
     def _resolve_integration_for_action(self, action_name: str) -> Optional[str]:
         """Determine which integration owns the given action name."""
@@ -266,16 +272,49 @@ class NakurityBackend(
                             "name": client_name
                         })
 
-                    # forward to intermediary using the same shape used in other paths:
-                    fwd = {"from_integration": client_name, "payload": data}
+                    # Forward all messages to Intermediary → Nakurity Client → Neuro Backend (pure relay)
                     try:
-                        resp = await self.intermediary.nakurity_outbound_client(fwd) if callable(self.intermediary.nakurity_outbound_client) else None
-                        # send ack back to client if intermediary returned something
+                        # Check if this is an action registration
+                        if data.get("event") == "register_actions":
+                            print(f"[Nakurity Backend] {client_name} registering actions")
+                            actions_schema = data.get("actions", {})
+                            
+                            # Store locally in intermediary for multiplexing
+                            self.intermediary.action_registry[client_name] = actions_schema
+                            
+                            # Forward to real Neuro backend via NakurityLink
+                            if hasattr(self.intermediary, "nakurity_outbound_client") and self.intermediary.nakurity_outbound_client:
+                                await self.intermediary.nakurity_outbound_client.register_actions({
+                                    "actions": actions_schema
+                                })
+                                print(f"[Nakurity Backend] forwarded {client_name} actions to Neuro backend")
+                            
+                            resp = {"status": "actions_registered"}
+                        else:
+                            # Forward regular messages through Intermediary → Nakurity Client → Neuro Backend
+                            print(f"[Nakurity Backend] forwarding {client_name} message to Neuro backend via Intermediary")
+                            
+                            # Send directly to NakurityLink for forwarding to real Neuro backend
+                            if hasattr(self.intermediary, "nakurity_outbound_client") and self.intermediary.nakurity_outbound_client:
+                                await self.intermediary.nakurity_outbound_client.send_event({
+                                    "event": "integration_message", 
+                                    "from": client_name,
+                                    "data": data
+                                })
+                                resp = {"status": "forwarded_to_neuro"}
+                            else:
+                                resp = {"error": "neuro backend not available"}
                         if resp is not None:
-                            await websocket.send(json.dumps({"result": resp}))
-                    except Exception:
+                            try:
+                                await websocket.send(json.dumps({"result": resp}))
+                            except (websockets.exceptions.ConnectionClosed, websockets.exceptions.ConnectionClosedOK):
+                                print(f"[Nakurity Backend] Client {client_name} disconnected during response")
+                    except Exception as e:
                         traceback.print_exc()
-                        await websocket.send(json.dumps({"error": "failed to forward to relay"}))
+                        try:
+                            await websocket.send(json.dumps({"error": "failed to forward to relay"}))
+                        except (websockets.exceptions.ConnectionClosed, websockets.exceptions.ConnectionClosedOK):
+                            print(f"[Nakurity Backend] Client {client_name} disconnected during error response")
             except websockets.ConnectionClosed:
                 pass
             except Exception:

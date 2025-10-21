@@ -1,4 +1,6 @@
 .venv
 neuro-sdk
 output.txt
-__pycache__/
+__pycache__
+trace_debug.log
+nakurity-toolchain
