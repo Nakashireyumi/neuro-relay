@@ -154,11 +154,15 @@ async def fake_integration():
         }))
         
         # listen for messages from Nakurity Backend
+        # Listen for integration messages with timeout
+        message_count = 0
+        max_messages = 3
         try:
             async for msg in ws:
                 try:
                     data = json.loads(msg)
                     print(f"[Integration] received: {data}")
+                    message_count += 1
                     
                     # Look for choose_action broadcast from Nakurity Backend
                     if data.get("event") == "choose_action_request" and "payload" in data:
@@ -173,6 +177,12 @@ async def fake_integration():
                             await ws.send(json.dumps(choice))
                             print("[Integration] sent choice")
                             break
+                    
+                    # Exit after receiving a few messages
+                    if message_count >= max_messages:
+                        print(f"[Integration] received {message_count} messages, exiting")
+                        break
+                        
                 except json.JSONDecodeError:
                     print(f"[Integration] received non-JSON: {msg}")
         except (websockets.exceptions.ConnectionClosed, websockets.exceptions.ConnectionClosedOK):
@@ -208,9 +218,16 @@ async def fake_watcher():
         }))
         print("[Watcher] sent ping")
         
+        # Listen for a few messages then exit
+        message_count = 0
+        max_messages = 5
         try:
             async for msg in ws:
                 print("[Watcher] recv:", msg)
+                message_count += 1
+                if message_count >= max_messages:
+                    print(f"[Watcher] received {message_count} messages, exiting")
+                    break
         except (websockets.exceptions.ConnectionClosed, websockets.exceptions.ConnectionClosedOK):
             print("[Watcher] connection closed")
 
@@ -243,13 +260,35 @@ async def fake_neuro_request():
             print(f"[Neuro] received non-JSON response: {response}")
 
 async def run_all():
-    # Increased wait time to account for enhanced context setup
-    await asyncio.sleep(3)  # wait for servers to start and context setup to complete
-    await asyncio.gather(
-        fake_integration(),
-        fake_watcher(),
-        fake_neuro_request()
-    )
+    print("[Test Harness] Starting relay integration tests...")
+    await asyncio.sleep(2)  # wait for servers to start
+    
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(
+                fake_integration(),
+                fake_watcher(),
+                fake_neuro_request()
+            ),
+            timeout=30.0  # 30 second timeout for all tests
+        )
+        print("[Test Harness] All tests completed successfully")
+    except asyncio.TimeoutError:
+        print("[Test Harness] Tests timed out after 30 seconds")
+    except Exception as e:
+        print(f"[Test Harness] Tests failed with error: {e}")
+    finally:
+        print("[Test Harness] Test run finished")
 
 if __name__ == "__main__":
-    asyncio.run(run_all())
+    import sys
+    try:
+        asyncio.run(run_all())
+        print("[Test Harness] Exiting successfully")
+        sys.exit(0)
+    except KeyboardInterrupt:
+        print("[Test Harness] Interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        print(f"[Test Harness] Fatal error: {e}")
+        sys.exit(1)

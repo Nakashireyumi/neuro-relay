@@ -32,17 +32,23 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install -r requirements-test.txt
 
-      - name: 🧠 Start Relay Intermediary
+      - name: 🧪 Run Unit Tests
+        run: |
+          python -m pytest src/dev/tests/test_relay_components.py -v --tb=short --timeout=30
+
+      - name: 🧠 Start Relay Intermediary (for integration tests)
         run: |
           nohup python -m src.dev.nakurity > relay.log 2>&1 &
           echo $! > relay_pid.txt
           sleep 3
           echo "Relay started on ws://${RELAY_HOST}:${RELAY_PORT}"
 
-      - name: 🧪 Run Test Harness
+      - name: 🧪 Run Integration Tests
+        timeout-minutes: 2
         run: |
-          python -m src.dev.tests.test_harness || (cat relay.log && exit 1)
+          timeout 60s python -m src.dev.tests.test_harness || (cat relay.log && exit 1)
 
       - name: 📜 Show Relay Logs
         if: always()
