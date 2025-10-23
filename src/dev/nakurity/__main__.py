@@ -5,6 +5,7 @@ import signal
 from .intermediary import Intermediary
 from .server import NakurityBackend
 from .client import connect_outbound
+from .intercept_proxy import InterceptProxy, config_from_yaml
 from ..utils.loadconfig import load_config
 from .linker import NakurityLink
 
@@ -191,7 +192,15 @@ async def main():
         port=PORT.get("nakurity-backend")
     ))
 
-    tasks = [intermediary_task, nakurity_task]
+    tasks = [intermediary_task, nakurity_task] 
+
+    # Optional: start intercept proxy if enabled in config
+    ip_cfg = cfg.get("intercept-proxy", {}) or {}
+    if ip_cfg.get("enabled", False):
+        proxy = InterceptProxy(config_from_yaml())
+        proxy_task = asyncio.create_task(proxy.start())
+        tasks.append(proxy_task)
+        print("[Main] InterceptProxy enabled and starting")
 
     # start nakurity client (outbound) as a background task, give it a forwarding callback
     # We pass the backend's intermediary forwarder so inbound messages from the real Neuro

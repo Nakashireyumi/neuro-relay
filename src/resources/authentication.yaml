@@ -30,3 +30,19 @@ nakurity-client:
 dependency-authentication:
   neuro-os:
     auth_token: "super-secret-token"
+
+# Optional transparent proxy that intercepts direct Neuro integration -> backend connections
+# and announces them to Neuro-OS via the Intermediary.
+intercept-proxy:
+  enabled: false
+  host: "127.0.0.1"
+  port: 8767
+  # Where to forward intercepted traffic (the real Neuro backend)
+  upstream_url: "ws://127.0.0.1:8000"
+  # Which commands indicate a successful connection/handshake to announce
+  match_commands:
+    - "startup"
+    - "actions/register"
+    - "context"
+  # Name this proxy uses when registering to the Intermediary
+  integration_name: "intercept-proxy"
