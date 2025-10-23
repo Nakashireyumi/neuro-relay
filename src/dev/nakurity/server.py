@@ -192,17 +192,38 @@ class NakurityBackend(
                 return {"actions": await self.intermediary.collect_registered_actions()}
             
             # Neuro chose an action — find correct integration
-            if "action" in payload:
-                action_name = payload["action"]
-                data = payload.get("data", {})
+            # Check both payload["action"] and msg["action"] for compatibility
+            if "action" in payload or "action" in msg:
+                action_name = payload.get("action") or msg.get("action")
+                action_id = msg.get("id")  # Action ID for response tracking
+                data = payload.get("data", {}) or msg.get("data", {})
                 integration_name = self._resolve_integration_for_action(action_name)
+                
+                print(f"[Nakurity Backend] routing action '{action_name}' (id={action_id}) to integration '{integration_name}'")
+                
                 if integration_name:
-                    await self.intermediary.send_to_integration(integration_name, {
-                        "event": "execute_action",
-                        "action": action_name,
-                        "params": data
-                    })
-                    return {"forwarded_to": integration_name}
+                    # Send action execution to the target integration's websocket
+                    ws = self.clients.get(integration_name)
+                    if ws:
+                        try:
+                            action_msg = {
+                                "command": "action",
+                                "action": action_name,
+                                "data": data,
+                                "id": action_id
+                            }
+                            await ws.send(json.dumps(action_msg))
+                            print(f"[Nakurity Backend] sent action to {integration_name}")
+                            return {"forwarded_to": integration_name}
+                        except Exception as e:
+                            print(f"[Nakurity Backend] failed to send action to {integration_name}: {e}")
+                            return {"error": f"failed to send to {integration_name}"}
+                    else:
+                        print(f"[Nakurity Backend] integration {integration_name} not connected")
+                        return {"error": f"integration {integration_name} not connected"}
+                else:
+                    print(f"[Nakurity Backend] no integration found for action '{action_name}'")
+                    return {"error": f"no integration owns action {action_name}"}
                 
             # if "from_integration" in msg:
             #     origin = msg["from_integration"]
@@ -274,10 +295,10 @@ class NakurityBackend(
 
                     # Forward all messages to Intermediary → Nakurity Client → Neuro Backend (pure relay)
                     try:
-                        # Check if this is an action registration
-                        if data.get("event") == "register_actions":
+                        # Check if this is an action registration (Neuro SDK format: {"command": "actions/register", "data": {"actions": [...]}})
+                        if data.get("command") == "actions/register":
                             print(f"[Nakurity Backend] {client_name} registering actions")
-                            actions_schema = data.get("actions", {})
+                            actions_schema = data.get("data", {}).get("actions", [])
                             
                             # Store locally in intermediary for multiplexing
                             self.intermediary.action_registry[client_name] = actions_schema
@@ -289,7 +310,8 @@ class NakurityBackend(
                                 })
                                 print(f"[Nakurity Backend] forwarded {client_name} actions to Neuro backend")
                             
-                            resp = {"status": "actions_registered"}
+                            # Don't send response - Neuro SDK expects transparent relay
+                            pass
                         else:
                             # Forward regular messages through Intermediary → Nakurity Client → Neuro Backend
                             print(f"[Nakurity Backend] forwarding {client_name} message to Neuro backend via Intermediary")
@@ -301,14 +323,10 @@ class NakurityBackend(
                                     "from": client_name,
                                     "data": data
                                 })
-                                resp = {"status": "forwarded_to_neuro"}
                             else:
-                                resp = {"error": "neuro backend not available"}
-                        if resp is not None:
-                            try:
-                                await websocket.send(json.dumps({"result": resp}))
-                            except (websockets.exceptions.ConnectionClosed, websockets.exceptions.ConnectionClosedOK):
-                                print(f"[Nakurity Backend] Client {client_name} disconnected during response")
+                                print(f"[Nakurity Backend] WARNING: neuro backend not available, message dropped")
+                        # Note: Do NOT send acknowledgment responses - the relay is transparent.
+                        # The real Neuro backend will send responses/commands back through the relay.
                     except Exception as e:
                         traceback.print_exc()
                         try:

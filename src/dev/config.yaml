@@ -2,7 +2,7 @@
 debug:
   enabled: true
   trace:
-    enabled: true
+    enabled: true  # Enabled for debugging action routing
     verbose: false
     show_file_path: false
     show_timestamp: true

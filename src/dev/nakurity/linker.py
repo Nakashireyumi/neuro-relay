@@ -50,7 +50,20 @@ class NakurityLink:
 
                 if item["type"] == "register_actions":
                     # forward action schema to real Neuro via NakurityClient
-                    await self.nakurity_client.register_actions(item.get("payload", {}))
+                    # Payload is the actions list directly - pass it to register_actions
+                    payload = item.get("payload", [])
+                    if isinstance(payload, list):
+                        # Convert list to format expected by register_actions (which expects actions in data.actions)
+                        await self.nakurity_client.send_command_data(
+                            __import__("json").dumps({
+                                "command": "actions/register",
+                                "game": self.nakurity_client.name,
+                                "data": {"actions": payload}
+                            }).encode()
+                        )
+                        print(f"[Nakurity Link] Forwarded {len(payload)} actions to Neuro backend")
+                    else:
+                        print(f"[Nakurity Link] ERROR: Expected list of actions, got {type(payload)}")
                 elif item["type"] == "event":
                     # wrap generic integration event and forward to Neuro via context command
                     event_type = item.get("event")

@@ -150,7 +150,14 @@ def trace(frame, event, arg):
 
     return trace
 
-sys.settrace(trace)
+# Apply trace configuration from config.yaml
+from ..utils.config_loader import get_config_loader, apply_trace_config
+config_loader = get_config_loader()
+apply_trace_config(trace)
+if config_loader.is_trace_enabled():
+    print(color(f"🧠 SmartTrace enabled", "magenta", "bold"))
+else:
+    print(color(f"🧠 SmartTrace disabled by configuration", "yellow", "bold"))
 
 HOST = {
     "intermediary": cfg.get("intermediary", {}).get("host", "127.0.0.1"),

@@ -35,13 +35,36 @@ class NakurityClient(AbstractNeuroAPI):
 
     async def handle_action(self, action: NeuroAction):
         # Actions from real Neuro backend flow back to intermediary → integrations
-        print(f"[Nakurity Client] received action from Neuro: {action.name}")
-        await self.router_forward_cb({
-            "from_neuro_backend": True,
-            "action": action.name,
-            "data": json.loads(action.data or "{}"),
-            "id": action.id_
-        })
+        print(f"[Nakurity Client] ========================================")
+        print(f"[Nakurity Client] RECEIVED ACTION FROM TONY (Neuro Backend)")
+        print(f"[Nakurity Client]   action.name: {action.name}")
+        print(f"[Nakurity Client]   action.id_: {action.id_}")
+        print(f"[Nakurity Client]   action.data: {action.data}")
+        print(f"[Nakurity Client] Forwarding to router_forward_cb...")
+        print(f"[Nakurity Client] ========================================")
+        
+        try:
+            result = await self.router_forward_cb({
+                "from_neuro_backend": True,
+                "action": action.name,
+                "data": json.loads(action.data or "{}"),
+                "id": action.id_
+            })
+            print(f"[Nakurity Client] router_forward_cb returned: {result}")
+            
+            # Send success result back to Tony
+            # The integration should have executed the action
+            if result and result.get("forwarded_to"):
+                await self.send_action_result(action.id_, True, f"Action forwarded to {result['forwarded_to']}")
+            elif result and "error" in result:
+                await self.send_action_result(action.id_, False, f"Error: {result['error']}")
+            else:
+                await self.send_action_result(action.id_, True, "Action executed")
+        except Exception as e:
+            print(f"[Nakurity Client] ERROR handling action: {e}")
+            import traceback
+            traceback.print_exc()
+            await self.send_action_result(action.id_, False, f"Relay error: {str(e)}")
 
     async def collect_registered_actions(self):
         """Ask the intermediary (via router callback) for available actions."""
