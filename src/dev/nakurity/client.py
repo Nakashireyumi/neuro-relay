@@ -27,7 +27,12 @@ class NakurityClient(AbstractNeuroAPI):
 
     async def initialize(self):
         # Send required startup to set game/title on backend
-        await self.send_startup_command()
+        try:
+            await self.send_startup_command()
+            print("[Nakurity Client] Startup command sent successfully")
+        except Exception as e:
+            print(f"[Nakurity Client] Warning: Failed to send startup command: {e}")
+            print("[Nakurity Client] Will continue - startup may be sent later if reconnected")
         # Optional steps disabled to avoid schema mismatches with dev backends
         # actions_schema = await self.collect_registered_actions()
         # if actions_schema:

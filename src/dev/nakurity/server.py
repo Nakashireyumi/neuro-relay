@@ -11,8 +11,9 @@ from neuro_api.server import (
     AbstractRecordingNeuroServerClient,
     AbstractHandlerNeuroServerClient,
     AbstractNeuroServerClient,
+    ActionResultData,
 )
-from neuro_api.command import Action
+from neuro_api.api import NeuroAction
 
 from .intermediary import Intermediary
 
@@ -206,15 +207,21 @@ class NakurityBackend(
                     ws = self.clients.get(integration_name)
                     if ws:
                         try:
-                            action_msg = {
-                                "command": "action",
-                                "action": action_name,
-                                "data": data,
-                                "id": action_id
-                            }
-                            await ws.send(json.dumps(action_msg))
+                            action_msg = NeuroAction(
+                                name=action_name,
+                                id_=action_id,
+                                data=data
+                            )
+                            await ws.send(action_msg)
                             print(f"[Nakurity Backend] sent action to {integration_name}")
-                            return {"forwarded_to": integration_name}
+                            recev = await self._recv_q.get()
+                            # recev = json.load(recev)
+                            recev = ActionResultData(
+                                recev.get("id"),
+                                recev.get("success"),
+                                recev.get("result")
+                            )
+                            return recev
                         except Exception as e:
                             print(f"[Nakurity Backend] failed to send action to {integration_name}: {e}")
                             return {"error": f"failed to send to {integration_name}"}
@@ -242,10 +249,13 @@ class NakurityBackend(
         """Determine which integration owns the given action name."""
         if "." in action_name:
             return action_name.split(".")[0]
-        for integration, actions in self.intermediary.action_registry.items():
-            if action_name in actions:
-                return integration
-        return None
+        else:
+            for integration, actions in self.intermediary.action_registry.items():
+                for action in actions:
+                    if action_name in action.get("name", ""):
+                        print(True)
+                        return integration
+            return None
         
     async def send_to_connected_client(self, game_title: str, command_bytes: bytes):
         """Optional helper to send server->client command to a specific local client."""
@@ -307,6 +317,8 @@ class NakurityBackend(
                             if hasattr(self.intermediary, "nakurity_outbound_client") and self.intermediary.nakurity_outbound_client:
                                 await self.intermediary.nakurity_outbound_client.register_actions({
                                     "actions": actions_schema
+
+
                                 })
                                 print(f"[Nakurity Backend] forwarded {client_name} actions to Neuro backend")
                             
