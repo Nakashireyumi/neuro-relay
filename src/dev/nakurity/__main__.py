@@ -23,6 +23,7 @@ cfg = load_config()
 import os
 print("PID:", os.getpid())
 
+import re
 import sys
 import linecache
 import inspect
@@ -86,68 +87,75 @@ TRACE_INCLUDE = ["src/dev/nakurity", "src/dev/tests"]
 TRACE_EVENTS = {"call", "return", "exception", "line"}  # include line events for verbose debugging
 TRACE_EXCLUDE_FUNCS = {"write_log", "trace"}
 
+def plain(txt):
+    """Strip ANSI codes for file output."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", txt)
+
 def trace(frame, event, arg):
     try:
         filename = Path(frame.f_code.co_filename).resolve()
     except Exception:
-        return  # during shutdown, modules may be gone
+        return
 
     try:
         filename.relative_to(PROJECT_ROOT)
     except ValueError:
-        return  # Skip non-project files
+        return
 
     rel = filename.relative_to(PROJECT_ROOT)
-    # include-path filtering
     rel_posix = rel.as_posix()
-    # if TRACE_INCLUDE and not any(p in rel_posix for p in TRACE_INCLUDE):
-    #     return
-
     func = frame.f_code.co_name
-    # if func in TRACE_EXCLUDE_FUNCS:
-    #     return
-
-    # if event not in TRACE_EVENTS:
-    #     return
-
     depth = len(inspect.stack(0)) - 1
     indent = "│  " * (depth % MAX_STACK_DEPTH)
     ts = f"[{now()}]" if SHOW_TIMESTAMP else ""
 
-    def log(msg):
-        try:
-            print(msg)
-            write_log(msg)
-        except Exception:
-            pass
+    def log(msg, newline=False):
+        clean = plain(msg)
+        if newline:
+            print()
+            write_log("")
+        print(msg)
+        write_log(clean)
 
     # === CALL ===
     if event == "call":
         args, _, _, values = inspect.getargvalues(frame)
         arg_str = ", ".join(f"{a}={short(values[a])}" for a in args if a in values)
-        header = f"\n{indent}{color('╭▶', 'cyan', 'bold')} {color(func, 'green', 'bold')}() {color(fmt_path(rel, frame.f_lineno), 'gray')} {ts}"
-        log(header)
+        header = (
+            f"\n{indent}{color('╭▶', 'cyan', 'bold')} "
+            f"{color(func, 'green', 'bold')}() "
+            f"{color(fmt_path(rel, frame.f_lineno), 'gray')} {ts}"
+        )
+        log(header, newline=True)
         if arg_str:
             log(f"{indent}{color('│ args:', 'yellow')} {arg_str}")
 
     # === LINE ===
     elif event == "line":
         line = linecache.getline(str(filename), frame.f_lineno).strip()
-        log(f"{indent}{color('│ →', 'cyan')} {color(line, 'reset')}")
+        msg = f"{indent}{color('│ →', 'cyan')} {line}"
+        log(msg)
         local_vars = fmt_locals(frame.f_locals)
         if local_vars:
             log(f"{indent}{color('│ • locals:', 'gray')} {local_vars}")
 
     # === RETURN ===
     elif event == "return":
-        msg = f"{indent}{color('╰↩', 'green', 'bold')} {color('return', 'gray')} {short(arg)} {ts}"
+        msg = (
+            f"{indent}{color('╰↩', 'green', 'bold')} "
+            f"{color('return', 'gray')} {short(arg)} {ts}"
+        )
         log(msg)
 
     # === EXCEPTION ===
     elif event == "exception":
         exc_type, exc_value, _ = arg
-        msg = f"{indent}{color('💥', 'red', 'bold')} {exc_type.__name__}: {exc_value}  {color(fmt_path(rel, frame.f_lineno), 'gray')}"
-        log(msg)
+        msg = (
+            f"{indent}{color('💥', 'red', 'bold')} "
+            f"{exc_type.__name__}: {exc_value}  "
+            f"{color(fmt_path(rel, frame.f_lineno), 'gray')}"
+        )
+        log(msg, newline=True)
 
     return trace
 
