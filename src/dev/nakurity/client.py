@@ -18,12 +18,14 @@ class NakurityClient(AbstractNeuroAPI):
         self.router_forward_cb = router_forward_cb
         self._reader_task: asyncio.Task | None = None
         print("[Nakurity Client] has initialized.")
+        #self._recv_q = asyncio.Queue()
 
     async def write_to_websocket(self, data: str):
         await self.websocket.send(data)
 
     async def read_from_websocket(self) -> str:
-        return await self.websocket.recv()
+        result = await self.websocket.recv()
+        return result
 
     async def initialize(self):
         # Send required startup to set game/title on backend
@@ -52,7 +54,7 @@ class NakurityClient(AbstractNeuroAPI):
             result = await self.router_forward_cb({
                 "from_neuro_backend": True,
                 "action": action.name,
-                "data": json.loads(action.data or "{}"),
+                "data": action.data or "{}", #json.loads(action.data or "{}"),
                 "id": action.id_
             })
             print(f"[Nakurity Client] router_forward_cb returned: {result}")
