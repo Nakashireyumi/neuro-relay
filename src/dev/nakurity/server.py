@@ -209,23 +209,23 @@ class NakurityBackend(
                     #print("[SERVER_DEBUG] CLIENTS INFO: FIRST CLIENT:", self.clients)
                     if ws:
                         try:
+
                             action_msg = {
                                     "command": "action",
                                     "data": {
                                             "id": action_id,
                                             "name": action_name,
-                                            "data": "string" #TODO - REPLACE WITH ACTUAL DATA
+                                            "data": data
                                     }
                             }
-
-                            print("[Nakurity Backend] ... sending action msg to integration:", action_msg)
+                            
+                            print("[Nakurity Backend] ... sending action msg to integration:", json.dumps(action_msg))
 
                             await ws.send(json.dumps(action_msg).encode())
 
                             print(f"[Nakurity Backend] sent action to {integration_name}")
-                            #print("[Nakurity Backend] by websocket", ws)
                             
-                            recev = await self._recv_q.get() #filled in run_server()
+                            recev = await self._recv_q.get() #must be filled by the receiver. here its filled in run_server()
 
                             print("[Nakurity Backend] ... RESPONSE FROM INTEGRATION: ", recev)
                             return recev
